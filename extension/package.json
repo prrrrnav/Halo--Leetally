@@ -1,0 +1,2 @@
+{"name":"leetcode-ai-interviewer-extension","private":true,"version":"0.1.0","scripts":{"build":"vite build","dev":"vite build --watch","test":"vitest run"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","typescript":"latest","react":"latest","react-dom":"latest"},"devDependencies":{"vitest":"latest","@types/chrome":"latest","@types/react":"latest","@types/react-dom":"latest"}}
+
