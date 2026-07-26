@@ -1,19 +1,82 @@
-from fastapi import Depends, Header, HTTPException
-from .adapters import InMemoryInterviewRepository, MockAIProvider, MockAuthProvider, SupabaseJWTAuthProvider
+from fastapi import Depends, HTTPException, status
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+)
+
+from .adapters import (
+    AuthenticationServiceUnavailableError,
+    InMemoryInterviewRepository,
+    InvalidAccessTokenError,
+    GroqAIProvider,
+    OpenAIRealtimeVoiceProvider,
+    SupabaseAuthProvider,
+    DeepgramTranscriptionProvider,
+)
 from .config import Settings, get_settings
-from .domain import AIProvider, AuthenticatedUser, AuthProvider, InterviewRepository
+from .domain import (
+    AuthenticatedUser,
+    AuthProvider,
+    InterviewRepository,
+    RealtimeVoiceProvider,
+)
+
 
 repository = InMemoryInterviewRepository()
-mock_ai = MockAIProvider()
 
-def get_auth_provider(settings: Settings = Depends(get_settings)) -> AuthProvider:
-    return SupabaseJWTAuthProvider(settings.supabase_jwt_secret) if settings.auth_mode == "supabase" else MockAuthProvider()
+bearer_scheme = HTTPBearer(auto_error=False)
 
-async def current_user(authorization: str | None = Header(default=None), provider: AuthProvider = Depends(get_auth_provider)) -> AuthenticatedUser:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Bearer token required")
-    return await provider.verify_token(authorization.removeprefix("Bearer ").strip())
 
-def get_repository() -> InterviewRepository: return repository
-def get_ai_provider() -> AIProvider: return mock_ai
+def get_auth_provider(
+    settings: Settings = Depends(get_settings),
+) -> AuthProvider:
+    return SupabaseAuthProvider(settings)
 
+
+def get_realtime_voice_provider(
+    settings: Settings = Depends(get_settings),
+) -> RealtimeVoiceProvider:
+    return OpenAIRealtimeVoiceProvider(settings)
+
+def get_transcription_provider(
+    settings: Settings = Depends(get_settings),
+) -> DeepgramTranscriptionProvider:
+    return DeepgramTranscriptionProvider(settings)
+
+def get_ai_provider(
+    settings: Settings = Depends(get_settings),
+) -> GroqAIProvider:
+    return GroqAIProvider(settings)
+
+async def current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(
+        bearer_scheme
+    ),
+    provider: AuthProvider = Depends(get_auth_provider),
+) -> AuthenticatedUser:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bearer token required",
+        )
+
+    try:
+        return await provider.verify_token(
+            credentials.credentials
+        )
+
+    except InvalidAccessTokenError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired access token",
+        ) from error
+
+    except AuthenticationServiceUnavailableError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication service unavailable",
+        ) from error
+
+
+def get_repository() -> InterviewRepository:
+    return repository

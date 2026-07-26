@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "LeetAlly",
+  "version": "0.1.0",
+  "description": "Practice LeetCode with an AI interviewer.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*",
+    "https://*.supabase.co/*",
+    "https://leetcode.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://leetcode.com/problems/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

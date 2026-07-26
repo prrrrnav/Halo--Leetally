@@ -1,0 +1,347 @@
+:host {
+  all: initial;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.leetally-shell {
+  position: fixed;
+  z-index: 2147483647;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  width: 220px;
+
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+
+  color: #f8fafc;
+  user-select: none;
+  touch-action: none;
+}
+
+.leetally-duck {
+  position: relative;
+
+  width: 86px;
+  height: 72px;
+
+  cursor: grab;
+
+  background:
+    linear-gradient(
+      135deg,
+      #fde047 0%,
+      #facc15 45%,
+      #eab308 100%
+    );
+
+  border-radius: 45% 50% 44% 48%;
+
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.38),
+    inset -9px -10px 14px rgba(161, 98, 7, 0.35),
+    inset 8px 7px 12px rgba(255, 255, 255, 0.18);
+
+  transform: rotate(-4deg);
+}
+
+.leetally-duck:active {
+  cursor: grabbing;
+}
+
+.leetally-duck.active {
+  animation: leetally-breathe 1.5s ease-in-out infinite;
+}
+
+@keyframes leetally-breathe {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+
+  50% {
+    transform: translateY(-5px) rotate(-2deg);
+  }
+}
+
+.leetally-duck::before {
+  content: "";
+
+  position: absolute;
+  top: -20px;
+  left: 22px;
+
+  width: 48px;
+  height: 48px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #fde047,
+      #facc15 60%,
+      #ca8a04
+    );
+
+  border-radius: 52% 48% 45% 50%;
+
+  box-shadow:
+    inset -6px -7px 10px rgba(161, 98, 7, 0.3);
+}
+
+.leetally-beak {
+  position: absolute;
+  z-index: 2;
+  top: -2px;
+  right: -16px;
+
+  width: 29px;
+  height: 18px;
+
+  background: #f97316;
+
+  clip-path: polygon(0 0, 100% 45%, 8% 100%);
+
+  transform: rotate(4deg);
+}
+
+.leetally-eye {
+  position: absolute;
+  z-index: 3;
+  top: -7px;
+
+  width: 7px;
+  height: 9px;
+
+  background: #111827;
+
+  border-radius: 50%;
+}
+
+.leetally-eye-left {
+  left: 43px;
+}
+
+.leetally-eye-right {
+  left: 55px;
+}
+
+.leetally-wing {
+  position: absolute;
+  top: 28px;
+  left: 10px;
+
+  width: 43px;
+  height: 27px;
+
+  background:
+    linear-gradient(
+      145deg,
+      #eab308,
+      #ca8a04
+    );
+
+  border-radius: 60% 40% 55% 45%;
+
+  transform: rotate(16deg);
+}
+
+.leetally-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  margin-top: 6px;
+  padding: 5px 7px;
+
+  background: rgba(24, 24, 27, 0.94);
+
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.42),
+    inset 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.leetally-circle-button {
+  display: grid;
+  place-items: center;
+
+  width: 35px;
+  height: 35px;
+
+  padding: 0;
+
+  color: #f8fafc;
+  background: #27272a;
+
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+
+  cursor: pointer;
+}
+
+.leetally-circle-button:hover {
+  background: #3f3f46;
+}
+
+.leetally-circle-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.leetally-end-button {
+  color: #fecaca;
+  background: #7f1d1d;
+}
+
+.leetally-time {
+  min-width: 58px;
+
+  color: #f8fafc;
+
+  font-family:
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    monospace;
+
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-align: center;
+}
+
+.leetally-panel {
+  position: absolute;
+  right: 0;
+  bottom: 122px;
+
+  width: 245px;
+  padding: 13px;
+
+  color: #f8fafc;
+  background: rgba(24, 24, 27, 0.98);
+
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
+}
+
+.leetally-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  margin-bottom: 11px;
+
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.leetally-close {
+  width: 25px;
+  height: 25px;
+
+  padding: 0;
+
+  color: #d4d4d8;
+  background: transparent;
+
+  border: 0;
+  border-radius: 6px;
+
+  cursor: pointer;
+}
+
+.leetally-close:hover {
+  background: #3f3f46;
+}
+
+.leetally-input {
+  width: 100%;
+  height: 36px;
+
+  margin-bottom: 8px;
+  padding: 0 10px;
+
+  color: #fafafa;
+  background: #18181b;
+
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  outline: none;
+
+  user-select: text;
+}
+
+.leetally-input:focus {
+  border-color: #facc15;
+}
+
+.leetally-login,
+.leetally-logout {
+  width: 100%;
+  height: 36px;
+
+  color: #18181b;
+  background: #facc15;
+
+  border: 0;
+  border-radius: 8px;
+
+  font-size: 12px;
+  font-weight: 700;
+
+  cursor: pointer;
+}
+
+.leetally-logout {
+  color: #fafafa;
+  background: #3f3f46;
+}
+
+.leetally-account,
+.leetally-session {
+  margin-bottom: 9px;
+
+  overflow: hidden;
+  color: #d4d4d8;
+
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leetally-session {
+  color: #a1a1aa;
+}
+
+.leetally-error {
+  margin-bottom: 9px;
+  padding: 8px;
+
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.5);
+
+  border-radius: 8px;
+
+  font-size: 11px;
+  line-height: 1.4;
+}

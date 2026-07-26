@@ -3,10 +3,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+
 @dataclass(frozen=True)
 class AuthenticatedUser:
     id: str
     email: str | None = None
+
 
 @dataclass
 class Interview:
@@ -14,30 +16,134 @@ class Interview:
     user_id: str
     platform: str
     problem_slug: str
-    problem_title: str
-    difficulty: str | None
     status: str
     created_at: datetime
+    screen_context: InterviewScreenContext
+
+    @property
+    def problem_title(self) -> str:
+        return self.screen_context.problem_title
+
+    @property
+    def difficulty(self) -> str | None:
+        return self.screen_context.difficulty
+
+    @property
+    def problem_description(self) -> str:
+        return self.screen_context.problem_description
+
+
+    @property
+    def programming_language(self) -> str:
+        return self.screen_context.programming_language
+
+
+    @property
+    def code(self) -> str:
+        return self.screen_context.code
+
+
+    @property
+    def visible_output(self) -> str:
+        return self.screen_context.visible_output
+
+
+@dataclass
+class InterviewScreenContext:
+    problem_title: str
+    problem_description: str = ""
+    difficulty: str | None = None
+    programming_language: str | None = None
+    code: str | None = None
+    visible_output: str | None = None
+
 
 class AuthProvider(ABC):
     @abstractmethod
-    async def verify_token(self, token: str) -> AuthenticatedUser: ...
+    async def verify_token(
+        self,
+        token: str,
+    ) -> AuthenticatedUser:
+        ...
+
 
 class InterviewRepository(ABC):
     @abstractmethod
-    async def create(self, user_id: str, data: dict[str, Any]) -> Interview: ...
+    async def create(
+        self,
+        user_id: str,
+        data: dict[str, Any],
+    ) -> Interview:
+        ...
+
     @abstractmethod
-    async def get(self, interview_id: str, user_id: str) -> Interview | None: ...
+    async def get(
+        self,
+        interview_id: str,
+        user_id: str,
+    ) -> Interview | None:
+        ...
+
+    @abstractmethod
+    async def update_context(
+        self,
+        interview_id: str,
+        user_id: str,
+        data: dict,
+    ):
+        interview = await self.get(
+            interview_id=interview_id,
+            user_id=user_id,
+        )
+
+        if interview is None:
+            return None
+
+        for field_name, field_value in data.items():
+            if field_value is not None:
+                setattr(
+                    interview,
+                    field_name,
+                    field_value,
+                )
+
+        return interview
+
 
 class AIProvider(ABC):
     @abstractmethod
-    async def reply(self, interview: Interview, candidate_message: str) -> str: ...
+    async def reply(
+        self,
+        interview: Interview,
+        candidate_message: str,
+    ) -> str:
+        ...
+
+
+class RealtimeVoiceProvider(ABC):
+    @abstractmethod
+    async def create_client_secret(
+        self,
+        user: AuthenticatedUser,
+        context: InterviewScreenContext,
+    ) -> dict[str, Any]:
+        ...
+
 
 class SpeechProvider(ABC):
     @abstractmethod
-    async def synthesize(self, text: str) -> bytes: ...
+    async def synthesize(
+        self,
+        text: str,
+    ) -> bytes:
+        ...
+
 
 class PaymentProvider(ABC):
     @abstractmethod
-    async def create_checkout(self, user_id: str, plan: str) -> str: ...
-
+    async def create_checkout(
+        self,
+        user_id: str,
+        plan: str,
+    ) -> str:
+        ...

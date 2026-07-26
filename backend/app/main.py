@@ -1,33 +1,345 @@
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
+
+from .adapters import (
+    DeepgramTranscriptionProvider,
+    AIServiceError,
+    RealtimeServiceError,
+    GroqAIProvider,
+    TranscriptionServiceError,
+)
 from .config import get_settings
-from .dependencies import current_user, get_ai_provider, get_repository
-from .domain import AIProvider, AuthenticatedUser, InterviewRepository
-from .schemas import InterviewCreate, InterviewOut, MessageIn, MessageOut, UserOut
+from .dependencies import (
+    current_user,
+    get_ai_provider,
+    get_realtime_voice_provider,
+    get_repository,
+    get_transcription_provider,
+)
+from .domain import (
+    AuthenticatedUser,
+    InterviewRepository,
+    InterviewScreenContext,
+    RealtimeVoiceProvider,
+)
+from .schemas import (
+    InterviewContextUpdate,
+    InterviewCreate,
+    InterviewOut,
+    InterviewTurnOut,
+    RealtimeSessionCreate,
+    UserOut,
+)
+
 
 settings = get_settings()
-app = FastAPI(title="AI LeetCode Interviewer API", version="0.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+app = FastAPI(
+    title="LeetAlly API",
+    version="0.1.0",
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://leetcode.com",
+        "https://www.leetcode.com",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_origin_regex=r"(chrome-extension|opera-extension)://.*",
+    allow_credentials=True,
+    allow_methods=[
+        "GET",
+        "POST",
+        "PATCH",
+        "OPTIONS",
+    ],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+    ],
+)
+
 
 @app.get("/api/v1/health")
-async def health(): return {"status": "ok", "version": app.version}
+async def health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "version": app.version,
+    }
 
-@app.get("/api/v1/auth/me", response_model=UserOut)
-async def me(user: AuthenticatedUser = Depends(current_user)): return user
 
-@app.post("/api/v1/interviews", response_model=InterviewOut, status_code=201)
-async def create_interview(payload: InterviewCreate, user: AuthenticatedUser = Depends(current_user), repo: InterviewRepository = Depends(get_repository)):
-    return await repo.create(user.id, payload.model_dump())
+@app.get(
+    "/api/v1/auth/me",
+    response_model=UserOut,
+)
+async def me(
+    user: AuthenticatedUser = Depends(current_user),
+) -> AuthenticatedUser:
+    return user
 
-@app.get("/api/v1/interviews/{interview_id}", response_model=InterviewOut)
-async def read_interview(interview_id: str, user: AuthenticatedUser = Depends(current_user), repo: InterviewRepository = Depends(get_repository)):
-    item = await repo.get(interview_id, user.id)
-    if not item: raise HTTPException(status_code=404, detail="Interview not found")
-    return item
 
-@app.post("/api/v1/interviews/{interview_id}/messages", response_model=MessageOut)
-async def message(interview_id: str, payload: MessageIn, user: AuthenticatedUser = Depends(current_user), repo: InterviewRepository = Depends(get_repository), ai: AIProvider = Depends(get_ai_provider)):
-    item = await repo.get(interview_id, user.id)
-    if not item: raise HTTPException(status_code=404, detail="Interview not found")
-    return MessageOut(reply=await ai.reply(item, payload.content))
+@app.post(
+    "/api/v1/interviews",
+    response_model=InterviewOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_interview(
+    payload: InterviewCreate,
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+):
+    return await repository.create(
+        user_id=user.id,
+        data=payload.model_dump(),
+    )
 
+
+@app.get(
+    "/api/v1/interviews/{interview_id}",
+    response_model=InterviewOut,
+)
+async def read_interview(
+    interview_id: str,
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+):
+    interview = await repository.get(
+        interview_id=interview_id,
+        user_id=user.id,
+    )
+
+    if interview is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found",
+        )
+
+    return interview
+
+
+@app.post(
+    "/api/v1/interviews/{interview_id}/turns/audio",
+    response_model=InterviewTurnOut,
+)
+async def submit_interview_audio(
+    interview_id: str,
+    audio: UploadFile = File(...),
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+    transcription_provider: DeepgramTranscriptionProvider = Depends(
+        get_transcription_provider
+    ),
+    ai_provider: GroqAIProvider = Depends(
+        get_ai_provider
+    ),
+) -> InterviewTurnOut:
+    interview = await repository.get(
+        interview_id=interview_id,
+        user_id=user.id,
+    )
+
+    if interview is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found.",
+        )
+
+    content_type = (
+        (audio.content_type or "")
+        .split(";")[0]
+        .strip()
+        .lower()
+    )
+
+    allowed_content_types = {
+        "audio/webm",
+        "audio/wav",
+        "audio/x-wav",
+    }
+
+    if content_type not in allowed_content_types:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported audio type: {content_type}",
+        )
+
+    audio_bytes = await audio.read()
+
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded audio file is empty.",
+        )
+
+    max_audio_size_bytes = 10 * 1024 * 1024
+
+    if len(audio_bytes) > max_audio_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="The uploaded audio file is too large.",
+        )
+
+    print(
+        "Received interview audio:",
+        {
+            "interview_id": interview_id,
+            "user_id": user.id,
+            "filename": audio.filename,
+            "content_type": content_type,
+            "size_bytes": len(audio_bytes),
+        },
+    )
+
+    try:
+        transcript = await transcription_provider.transcribe(
+            audio_bytes=audio_bytes,
+            content_type=content_type,
+        )
+
+    except TranscriptionServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    print(
+        "Deepgram transcript:",
+        {
+            "interview_id": interview_id,
+            "transcript": transcript,
+        },
+    )
+
+    if not transcript:
+        return InterviewTurnOut(
+            transcript="",
+            interviewer_message=(
+                "I could not clearly hear your response. "
+                "Please repeat it."
+            ),
+        )
+
+    try:
+        interviewer_message = await ai_provider.reply(
+            interview=interview,
+            candidate_message=transcript,
+        )
+
+    except AIServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    print(
+        "Groq interviewer response:",
+        {
+            "interview_id": interview_id,
+            "message": interviewer_message,
+        },
+    )
+
+    print(
+        "Interview context:",
+        {
+            "interview_id": interview.id,
+            "problem_title": interview.problem_title,
+            "problem_description_length": len(
+                interview.problem_description or ""
+            ),
+            "difficulty": interview.difficulty,
+            "programming_language":
+            interview.screen_context.programming_language,
+            "code_length": len(
+                interview.code or ""
+            ),
+            "visible_output":
+            interview.visible_output,
+        },
+    )
+
+    return InterviewTurnOut(
+        transcript=transcript,
+        interviewer_message=interviewer_message,
+    )
+
+
+@app.post("/api/v1/realtime/session")
+async def create_realtime_session(
+    payload: RealtimeSessionCreate,
+    user: AuthenticatedUser = Depends(current_user),
+    voice_provider: RealtimeVoiceProvider = Depends(
+        get_realtime_voice_provider
+    ),
+):
+    context = InterviewScreenContext(
+        problem_title=payload.problem_title,
+        problem_description=payload.problem_description,
+        difficulty=payload.difficulty,
+        programming_language=payload.programming_language,
+        code=payload.code,
+        visible_output=payload.visible_output,
+    )
+
+    try:
+        return await voice_provider.create_client_secret(
+            user=user,
+            context=context,
+        )
+
+    except RealtimeServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+
+@app.patch(
+    "/api/v1/interviews/{interview_id}/context",
+    response_model=InterviewOut,
+)
+async def update_interview_context(
+    interview_id: str,
+    payload: InterviewContextUpdate,
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+):
+    interview = await repository.update_context(
+        interview_id=interview_id,
+        user_id=user.id,
+        data=payload.model_dump(
+            exclude_none=True,
+        ),
+    )
+
+    if interview is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found.",
+        )
+
+    print(
+        "Interview context updated:",
+        {
+            "interview_id": interview_id,
+            "problem_title": payload.problem_title,
+            "language": payload.programming_language,
+            "code_length": (
+                len(payload.code)
+                if payload.code is not None
+                else None
+            ),
+        },
+    )
+
+    return interview
