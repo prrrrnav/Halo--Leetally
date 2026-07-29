@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.1-8b-instant"
 
+    fish_audio_api_key: str | None = None
+
+    fish_audio_model: str = "s2.1-pro-free"
+    fish_audio_reference_id: str | None = None
+    fish_audio_format: str = "mp3"
+    fish_audio_latency: str = "balanced"
+    fish_audio_speed: float = 1.0
+
     cors_origins: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(
@@ -27,6 +35,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
 
     @property
     def cors_origin_list(self) -> list[str]:

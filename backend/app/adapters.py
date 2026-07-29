@@ -14,6 +14,8 @@ from .domain import (
     InterviewScreenContext,
     PaymentProvider,
     RealtimeVoiceProvider,
+    SpeechProvider,
+    SynthesizedSpeech,
 )
 
 
@@ -38,6 +40,9 @@ class TranscriptionServiceError(Exception):
 
 class AIServiceError(Exception):
     """Raised when the interviewer AI service fails."""
+
+class SpeechServiceError(Exception):
+    """Raised when speech synthesis fails."""
 
 
 # =========================================================
@@ -317,6 +322,141 @@ class DeepgramTranscriptionProvider:
             ) from error
 
         return transcript.strip()
+
+# =========================================================
+# FISH AUDIO TEXT TO SPEECH
+# =========================================================
+
+
+class FishAudioSpeechProvider(SpeechProvider):
+    _CONTENT_TYPES = {
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "pcm": "audio/L16",
+        "opus": "audio/ogg; codecs=opus",
+    }
+
+    _SUPPORTED_MODELS = {
+        "s1",
+        "s2-pro",
+        "s2.1-pro",
+        "s2.1-pro-free",
+    }
+
+    _SUPPORTED_LATENCIES = {
+        "low",
+        "normal",
+        "balanced",
+    }
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.fish_audio_api_key:
+            raise RuntimeError("FISH_AUDIO_API_KEY is required")
+
+        if settings.fish_audio_model not in self._SUPPORTED_MODELS:
+            raise RuntimeError(
+                "Unsupported FISH_AUDIO_MODEL. "
+                "Use s1, s2-pro, s2.1-pro, or s2.1-pro-free."
+            )
+
+        if settings.fish_audio_format not in self._CONTENT_TYPES:
+            raise RuntimeError(
+                "FISH_AUDIO_FORMAT must be mp3, wav, pcm, or opus"
+            )
+
+        if (
+            settings.fish_audio_latency
+            not in self._SUPPORTED_LATENCIES
+        ):
+            raise RuntimeError(
+                "FISH_AUDIO_LATENCY must be "
+                "low, normal, or balanced"
+            )
+
+        if not 0.5 <= settings.fish_audio_speed <= 2.0:
+            raise RuntimeError(
+                "FISH_AUDIO_SPEED must be between 0.5 and 2.0"
+            )
+
+        self._api_key = settings.fish_audio_api_key
+        self._model = settings.fish_audio_model
+        self._reference_id = (
+            settings.fish_audio_reference_id
+        )
+        self._format = settings.fish_audio_format
+        self._latency = settings.fish_audio_latency
+        self._speed = settings.fish_audio_speed
+        self._url = "https://api.fish.audio/v1/tts"
+
+    async def synthesize(
+        self,
+        text: str,
+    ) -> SynthesizedSpeech:
+        normalized_text = text.strip()
+
+        if not normalized_text:
+            raise SpeechServiceError(
+                "Cannot synthesize an empty message."
+            )
+
+        payload: dict[str, Any] = {
+            "text": normalized_text,
+            "format": self._format,
+            "normalize": True,
+            "latency": self._latency,
+            "prosody": {
+                "speed": self._speed,
+                "volume": 0,
+                "normalize_loudness": True,
+            },
+        }
+
+        # reference_id selects the Fish Audio voice.
+        # If omitted, Fish Audio uses its default voice.
+        if self._reference_id:
+            payload["reference_id"] = self._reference_id
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+            "Accept": "*/*",
+            # Fish Audio expects the synthesis model in a header.
+            "model": self._model,
+        }
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=45.0,
+            ) as client:
+                response = await client.post(
+                    self._url,
+                    headers=headers,
+                    json=payload,
+                )
+
+        except httpx.RequestError as error:
+            raise SpeechServiceError(
+                "Fish Audio speech service is unavailable."
+            ) from error
+
+        if response.status_code != 200:
+            raise SpeechServiceError(
+                f"Fish Audio returned "
+                f"{response.status_code}: "
+                f"{response.text[:500]}"
+            )
+
+        if not response.content:
+            raise SpeechServiceError(
+                "Fish Audio returned an empty audio response."
+            )
+
+        return SynthesizedSpeech(
+            data=response.content,
+            content_type=self._CONTENT_TYPES[
+                self._format
+            ],
+        )
 
 def build_interviewer_instructions(
     context: InterviewScreenContext,

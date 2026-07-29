@@ -20,9 +20,18 @@ export interface Interview {
   created_at: string;
 }
 
+export interface SpeechSynthesisResponse {
+  audio_base64: string;
+  audio_content_type: string;
+}
+
 export interface InterviewTurnResponse {
   transcript: string;
   interviewer_message: string;
+  /** Base64-encoded audio from Fish Audio (may be absent if synthesis failed). */
+  interviewer_audio_base64?: string | null;
+  /** MIME type of the audio, e.g. "audio/mpeg". */
+  interviewer_audio_content_type?: string | null;
 }
 
 async function getAccessToken(): Promise<string> {
@@ -116,6 +125,36 @@ export async function submitInterviewAudio(
     throw new Error(
       body?.detail ??
         `Backend request failed with status ${response.status}`,
+    );
+  }
+
+  return response.json();
+}
+
+export async function synthesizeSpeech(
+  text: string,
+): Promise<SpeechSynthesisResponse> {
+  const response = await authenticatedFetch(
+    `${API_URL}/speech`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const body = await response
+      .json()
+      .catch(() => null);
+
+    throw new Error(
+      body?.detail ??
+        `Fish Audio request failed with status ${response.status}`,
     );
   }
 

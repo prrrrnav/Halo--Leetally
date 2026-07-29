@@ -12,11 +12,13 @@ import type { Session } from "@supabase/supabase-js";
 import {
   createInterview,
   submitInterviewAudio,
+  synthesizeSpeech,
 } from "../../lib/api.ts";
+
 import { LeetCodeAdapter } from "../../lib/leetcode.ts";
 import { supabase } from "../../lib/supabase.ts";
-import { getTTSProvider } from "../../lib/tts-service.ts";
 import type { TTSStatus } from "../../lib/tts/types.ts";
+
 import { LocalVad } from "../../lib/voice/local-vad.ts";
 import { float32ToPcm16 } from "../../lib/voice/pcm.ts";
 
@@ -115,7 +117,7 @@ function readLeetCodeContext(): LeetCodeContext {
 }
 
 const adapter = new LeetCodeAdapter();
-const tts = getTTSProvider();
+
 
 const VAD_SAMPLE_RATE = 16_000;
 
@@ -200,6 +202,12 @@ export default function App() {
   const interviewIdRef = useRef<string | null>(null);
   const runningRef = useRef(false);
   const processingRef = useRef(false);
+
+  const fishAudioRef =
+    useRef<HTMLAudioElement | null>(null);
+
+  const fishAudioUrlRef =
+    useRef<string | null>(null);
 
   const CODE_IDLE_DELAY_MS = 10_000;
 
@@ -295,7 +303,7 @@ export default function App() {
 
     return () => {
       subscription.unsubscribe();
-      tts.cancel();
+      stopFishAudio();
     };
   }, []);
 
@@ -308,17 +316,18 @@ export default function App() {
     vadInitializationRef.current =
       vad.initialize({
         onSpeechStart: () => {
-          if (
-            disposed ||
-            !runningRef.current ||
-            processingRef.current
-          ) {
+          if (disposed || !runningRef.current) {
             return;
           }
 
-          tts.cancel();
+          // Always stop audio immediately when user starts speaking.
+          // Do NOT gate this on processingRef — that blocks interruptions.
+          stopFishAudio();
           setTTSStatus("cancelled");
-          setCandidateStatus("speaking");
+
+          if (!processingRef.current) {
+            setCandidateStatus("speaking");
+          }
         },
 
         onSpeechEnd: (audio) => {
@@ -405,9 +414,26 @@ export default function App() {
     setPassword("");
   }
 
+  function stopFishAudio(): void {
+    const audio = fishAudioRef.current;
+
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      fishAudioRef.current = null;
+    }
+
+    const audioUrl = fishAudioUrlRef.current;
+
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      fishAudioUrlRef.current = null;
+    }
+  }
+
   async function speak(
     text: string,
-    speechId = crypto.randomUUID(),
   ): Promise<void> {
     const normalizedText = text.trim();
 
@@ -416,40 +442,146 @@ export default function App() {
     }
 
     setError(null);
+    setTTSStatus("loading");
 
     try {
-      await tts.speak(
-        normalizedText,
-        {
-          speechId,
-          rate: 0.92,
-          pitch: 1,
-          volume: 1,
-          language: "en-US",
-          voiceName: "Microsoft Aria Online",
-        },
-        {
-          onStatusChange: setTTSStatus,
+      stopFishAudio();
 
-          onError: (speechError) => {
-            console.error(
-              "[LeetAlly TTS]",
-              speechError,
-            );
+      console.log("[LeetAlly] Requesting Fish Audio via backend");
 
-            setError(speechError.message);
-          },
-        },
+      const result = await synthesizeSpeech(normalizedText);
+
+      await playBackendAudio(
+        result.audio_base64,
+        result.audio_content_type,
       );
     } catch (cause) {
       const message =
         cause instanceof Error
           ? cause.message
-          : "Unable to play interviewer voice.";
+          : "Unable to play Fish Audio.";
+
+      console.error("[LeetAlly Fish Audio]", cause);
 
       setError(message);
       setTTSStatus("error");
     }
+  }
+
+  /**
+   * Play base64-encoded audio returned by the backend (Fish Audio).
+   * This is the primary voice path — no robot voice here.
+   */
+  async function playBackendAudio(
+    base64: string,
+    contentType: string,
+  ): Promise<void> {
+    stopFishAudio();
+
+    console.log(
+      "[LeetAlly] Preparing Fish Audio",
+      {
+        contentType,
+        base64Length: base64.length,
+      },
+    );
+
+    const binary = atob(base64);
+    const bytes = new Uint8Array(
+      binary.length
+    );
+
+    for (
+      let index = 0;
+      index < binary.length;
+      index += 1
+    ) {
+      bytes[index] =
+        binary.charCodeAt(index);
+    }
+
+    const blob = new Blob(
+      [bytes],
+      {
+        type: contentType,
+      },
+    );
+
+    const audioUrl =
+      URL.createObjectURL(blob);
+
+    const audio = new Audio(audioUrl);
+
+    fishAudioRef.current = audio;
+    fishAudioUrlRef.current = audioUrl;
+
+    audio.preload = "auto";
+
+    setTTSStatus("loading");
+
+    await new Promise<void>(
+      (resolve, reject) => {
+        function releaseAudio(): void {
+          if (
+            fishAudioRef.current === audio
+          ) {
+            fishAudioRef.current = null;
+          }
+
+          if (
+            fishAudioUrlRef.current ===
+            audioUrl
+          ) {
+            URL.revokeObjectURL(audioUrl);
+            fishAudioUrlRef.current = null;
+          }
+        }
+
+        audio.onplay = () => {
+          console.log(
+            "[LeetAlly] Fish Audio playing"
+          );
+
+          setTTSStatus("speaking");
+        };
+
+        audio.onended = () => {
+          console.log(
+            "[LeetAlly] Fish Audio ended"
+          );
+
+          releaseAudio();
+          setTTSStatus("idle");
+          resolve();
+        };
+
+        audio.onerror = () => {
+          releaseAudio();
+          setTTSStatus("error");
+
+          reject(
+            new Error(
+              "Fish Audio playback failed."
+            ),
+          );
+        };
+
+        audio.play().catch(
+          (cause: unknown) => {
+            releaseAudio();
+            setTTSStatus("error");
+
+            reject(
+              cause instanceof Error
+                ? cause
+                : new Error(
+                  "Fish Audio playback failed.",
+                ),
+            );
+          },
+        );
+      },
+    );
   }
 
   async function processCapturedSpeech(
@@ -495,7 +627,41 @@ export default function App() {
       setLastTranscript(result.transcript);
       setCandidateStatus("listening");
 
-      await speak(result.interviewer_message);
+      /*
+       * API call is done — clear processingRef NOW so the next VAD
+       * speech segment can be captured while audio is still playing.
+       */
+      processingRef.current = false;
+
+      /*
+       * Prefer Fish Audio from the backend (natural voice).
+       * Fall back to browser TTS only when no audio was returned.
+       */
+      console.log("[LeetAlly] Interview response", {
+        hasFishAudio: Boolean(
+          result.interviewer_audio_base64
+        ),
+        audioContentType:
+          result.interviewer_audio_content_type,
+        audioBase64Length:
+          result.interviewer_audio_base64?.length ?? 0,
+      });
+
+      if (
+        result.interviewer_audio_base64 &&
+        result.interviewer_audio_content_type
+      ) {
+        await playBackendAudio(
+          result.interviewer_audio_base64,
+          result.interviewer_audio_content_type,
+        );
+      } else {
+        throw new Error(
+          "The backend returned no Fish Audio. " +
+          "Check the FastAPI terminal for " +
+          "'Fish Audio synthesis failed'."
+        );
+      }
 
       if (runningRef.current) {
         setCandidateStatus("listening");
@@ -525,7 +691,7 @@ export default function App() {
   }
 
   function stopVoice(): void {
-    tts.cancel();
+    stopFishAudio();
     setTTSStatus("cancelled");
 
     if (runningRef.current) {
@@ -609,7 +775,7 @@ export default function App() {
     }
 
     void vadRef.current?.pause();
-    tts.cancel();
+    stopFishAudio();
 
     setInterviewId(null);
     setCandidateStatus("idle");

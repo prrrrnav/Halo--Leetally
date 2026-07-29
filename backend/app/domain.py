@@ -1,3 +1,4 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,6 +9,11 @@ from typing import Any
 class AuthenticatedUser:
     id: str
     email: str | None = None
+
+@dataclass(frozen=True)
+class SynthesizedSpeech:
+    data: bytes
+    content_type: str
 
 
 @dataclass
@@ -34,17 +40,15 @@ class Interview:
 
 
     @property
-    def programming_language(self) -> str:
+    def programming_language(self) -> str | None:
         return self.screen_context.programming_language
 
-
     @property
-    def code(self) -> str:
+    def code(self) -> str | None:
         return self.screen_context.code
 
-
     @property
-    def visible_output(self) -> str:
+    def visible_output(self) -> str | None:
         return self.screen_context.visible_output
 
 
@@ -135,9 +139,8 @@ class SpeechProvider(ABC):
     async def synthesize(
         self,
         text: str,
-    ) -> bytes:
+    ) -> SynthesizedSpeech:
         ...
-
 
 class PaymentProvider(ABC):
     @abstractmethod

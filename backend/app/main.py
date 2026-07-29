@@ -1,3 +1,4 @@
+import base64
 from fastapi import (
     Depends,
     FastAPI,
@@ -13,6 +14,7 @@ from .adapters import (
     AIServiceError,
     RealtimeServiceError,
     GroqAIProvider,
+    SpeechServiceError,
     TranscriptionServiceError,
 )
 from .config import get_settings
@@ -20,6 +22,7 @@ from .dependencies import (
     current_user,
     get_ai_provider,
     get_realtime_voice_provider,
+    get_speech_provider,
     get_repository,
     get_transcription_provider,
 )
@@ -28,6 +31,7 @@ from .domain import (
     InterviewRepository,
     InterviewScreenContext,
     RealtimeVoiceProvider,
+    SpeechProvider,
 )
 from .schemas import (
     InterviewContextUpdate,
@@ -35,6 +39,8 @@ from .schemas import (
     InterviewOut,
     InterviewTurnOut,
     RealtimeSessionCreate,
+    SpeechSynthesisIn,
+    SpeechSynthesisOut,
     UserOut,
 )
 
@@ -135,12 +141,17 @@ async def submit_interview_audio(
     interview_id: str,
     audio: UploadFile = File(...),
     user: AuthenticatedUser = Depends(current_user),
-    repository: InterviewRepository = Depends(get_repository),
+    repository: InterviewRepository = Depends(
+        get_repository
+    ),
     transcription_provider: DeepgramTranscriptionProvider = Depends(
         get_transcription_provider
     ),
     ai_provider: GroqAIProvider = Depends(
         get_ai_provider
+    ),
+    speech_provider: SpeechProvider = Depends(
+        get_speech_provider
     ),
 ) -> InterviewTurnOut:
     interview = await repository.get(
@@ -249,6 +260,46 @@ async def submit_interview_audio(
         },
     )
 
+    interviewer_audio_base64: str | None = None
+    interviewer_audio_content_type: str | None = None
+
+    try:
+        synthesized_speech = await speech_provider.synthesize(
+            interviewer_message
+        )
+
+    except SpeechServiceError as error:
+        # Continue with text if Fish Audio is temporarily unavailable.
+        print(
+            "Fish Audio synthesis failed:",
+            {
+                "interview_id": interview_id,
+                "error": str(error),
+            },
+        )
+
+    else:
+        interviewer_audio_base64 = base64.b64encode(
+            synthesized_speech.data
+        ).decode("ascii")
+
+        interviewer_audio_content_type = (
+            synthesized_speech.content_type
+        )
+
+        print(
+            "Fish Audio synthesis complete:",
+            {
+                "interview_id": interview_id,
+                "content_type": (
+                    interviewer_audio_content_type
+                ),
+                "size_bytes": len(
+                    synthesized_speech.data
+                ),
+            },
+        )
+
     print(
         "Interview context:",
         {
@@ -271,8 +322,51 @@ async def submit_interview_audio(
     return InterviewTurnOut(
         transcript=transcript,
         interviewer_message=interviewer_message,
+        interviewer_audio_base64=(
+            interviewer_audio_base64
+        ),
+        interviewer_audio_content_type=(
+            interviewer_audio_content_type
+        ),
     )
 
+@app.post(
+    "/api/v1/speech",
+    response_model=SpeechSynthesisOut,
+)
+async def synthesize_speech(
+    payload: SpeechSynthesisIn,
+    user: AuthenticatedUser = Depends(current_user),
+    speech_provider: SpeechProvider = Depends(
+        get_speech_provider
+    ),
+) -> SpeechSynthesisOut:
+    try:
+        speech = await speech_provider.synthesize(
+            payload.text
+        )
+
+    except SpeechServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+
+    print(
+        "Fish Audio standalone synthesis complete:",
+        {
+            "user_id": user.id,
+            "content_type": speech.content_type,
+            "size_bytes": len(speech.data),
+        },
+    )
+
+    return SpeechSynthesisOut(
+        audio_base64=base64.b64encode(
+            speech.data
+        ).decode("ascii"),
+        audio_content_type=speech.content_type,
+    )
 
 @app.post("/api/v1/realtime/session")
 async def create_realtime_session(

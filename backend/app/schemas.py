@@ -97,7 +97,19 @@ class MessageIn(BaseModel):
 class MessageOut(BaseModel):
     reply: str
 
+class SpeechSynthesisIn(BaseModel):
+    text: str = Field(
+        min_length=1,
+        max_length=5000,
+    )
+
+
+class SpeechSynthesisOut(BaseModel):
+    audio_base64: str
+    audio_content_type: str
 
 class InterviewTurnOut(BaseModel):
     transcript: str
     interviewer_message: str
+    interviewer_audio_base64: str | None = None
+    interviewer_audio_content_type: str | None = None

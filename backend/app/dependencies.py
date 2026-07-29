@@ -12,6 +12,7 @@ from .adapters import (
     OpenAIRealtimeVoiceProvider,
     SupabaseAuthProvider,
     DeepgramTranscriptionProvider,
+    FishAudioSpeechProvider,
 )
 from .config import Settings, get_settings
 from .domain import (
@@ -19,6 +20,7 @@ from .domain import (
     AuthProvider,
     InterviewRepository,
     RealtimeVoiceProvider,
+    SpeechProvider,
 )
 
 
@@ -47,6 +49,12 @@ def get_ai_provider(
     settings: Settings = Depends(get_settings),
 ) -> GroqAIProvider:
     return GroqAIProvider(settings)
+
+def get_speech_provider(
+    settings: Settings = Depends(get_settings),
+) -> SpeechProvider:
+    return FishAudioSpeechProvider(settings)
+
 
 async def current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(
