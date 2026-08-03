@@ -26,79 +26,155 @@ input {
 .leetally-creature {
   position: relative;
 
-  width: 88px;
-  height: 86px;
+  display: grid;
+  place-items: center;
+  width: 108px;
+  height: 108px;
+
+  background:
+    radial-gradient(circle at 50% 45%, rgba(28, 45, 63, 0.64), rgba(3, 8, 15, 0.96) 70%);
+  border: 1px solid rgba(103, 232, 249, 0.16);
+  border-radius: 28px;
+
+  box-shadow:
+    0 18px 44px rgba(0, 0, 0, 0.52),
+    inset 0 0 30px rgba(70, 112, 163, 0.08);
 
   cursor: grab;
   touch-action: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.leetally-interviewer-anchor {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.leetally-type-picker {
+  position: absolute;
+  z-index: 4;
+  bottom: calc(100% + 9px);
+  left: 50%;
+  display: grid;
+  grid-template-columns: repeat(4, auto);
+  gap: 14px;
+  padding: 5px 8px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 7px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.leetally-interviewer-anchor:hover .leetally-type-picker,
+.leetally-interviewer-anchor:focus-within .leetally-type-picker {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.leetally-type-picker button {
+  position: relative;
+  min-width: auto;
+  height: 24px;
+  padding: 0;
+  color: #c1ccda;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 9px;
+  font-weight: 800;
+  text-shadow: 0 2px 8px #000,0 0 12px #000;
+  cursor: pointer;
+}
+
+.leetally-type-picker button.active {
+  color: #a8caff;
+  background: transparent;
+  box-shadow: none;
+}
+
+.leetally-type-picker button.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: #a8caff;
+  box-shadow: 0 0 7px #4d8dff;
+}
+
+.leetally-type-picker button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.leetally-type-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  padding: 3px 5px;
+  color: #dce9ff;
+  background: rgba(4, 13, 27, 0.86);
+  border: 1px solid rgba(168, 202, 255, 0.34);
+  border-radius: 6px;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  pointer-events: none;
 }
 
 .leetally-creature:active {
   cursor: grabbing;
 }
 
-.leetally-creature.running {
-  animation: float 1.4s ease-in-out infinite;
+.leetally-interviewer-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
 }
 
-.head {
+.leetally-mark-status {
   position: absolute;
-  z-index: 2;
-  top: 0;
-  left: 19px;
-
-  width: 51px;
-  height: 49px;
-
-  background: linear-gradient(145deg, #facc15, #eab308);
-  border-radius: 48% 48% 43% 43%;
-
-  box-shadow: inset -6px -7px 10px rgba(0, 0, 0, 0.16);
-}
-
-.body {
-  position: absolute;
-  bottom: 0;
-  left: 8px;
-
-  width: 75px;
-  height: 57px;
-
-  background: linear-gradient(145deg, #fde047, #ca8a04);
-  border-radius: 52% 48% 48% 52%;
-
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.42);
-}
-
-.eye {
-  position: absolute;
-  top: 16px;
-
-  width: 6px;
-  height: 8px;
-
-  background: #111827;
+  right: 8px;
+  bottom: 8px;
+  width: 7px;
+  height: 7px;
+  background: #6b7b8d;
   border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
 }
 
-.eye.left {
-  left: 15px;
+.leetally-creature.mode-listening {
+  border-color: rgba(34, 211, 238, 0.28);
 }
 
-.eye.right {
-  right: 15px;
+.leetally-creature.mode-listening .leetally-mark-status,
+.leetally-creature.mode-user-speaking .leetally-mark-status {
+  color: #22d3ee;
+  background: #22d3ee;
 }
 
-.mouth {
-  position: absolute;
-  bottom: 10px;
-  left: 20px;
+.leetally-creature.mode-user-speaking {
+  box-shadow: 0 18px 48px rgba(0, 208, 200, 0.22), inset 0 0 30px rgba(34, 211, 238, 0.1);
+}
 
-  width: 12px;
-  height: 5px;
+.leetally-creature.mode-thinking .leetally-mark-status,
+.leetally-creature.mode-ai-speaking .leetally-mark-status {
+  color: #c26bf1;
+  background: #c26bf1;
+}
 
-  border-bottom: 2px solid #713f12;
-  border-radius: 50%;
+.leetally-creature.mode-ai-speaking {
+  border-color: rgba(192, 92, 231, 0.4);
+  box-shadow: 0 18px 48px rgba(141, 82, 215, 0.26), inset 0 0 30px rgba(123, 97, 255, 0.11);
 }
 
 .leetally-controls {
@@ -192,7 +268,8 @@ input {
 }
 
 .leetally-login,
-.leetally-logout {
+.leetally-logout,
+.leetally-google-login {
   width: 100%;
   height: 36px;
 
@@ -234,16 +311,6 @@ input {
   font-size: 11px;
 }
 
-@keyframes float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-
-  50% {
-    transform: translateY(-5px);
-  }
-}
 .leetally-voice-section {
   margin-top: 12px;
   padding-top: 12px;
@@ -265,18 +332,60 @@ input {
   flex: 1;
 }
 
-.leetally-creature.speaking .mouth {
-  animation: leetally-speaking 350ms infinite alternate;
+@media (prefers-reduced-motion: reduce) {
+  .leetally-creature {
+    transition: none;
+  }
 }
 
-@keyframes leetally-speaking {
-  from {
-    transform: scaleX(0.8) scaleY(0.7);
-  }
+.leetally-google-login {
+  margin-bottom: 10px;
+  color: #18181b;
+  background: #f4f4f5;
+}
 
-  to {
-    transform: scaleX(1.15) scaleY(1.25);
-  }
+.leetally-google-login b {
+  margin-right: 6px;
+  color: #4285f4;
+}
+
+.leetally-auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+  color: #71717a;
+  font-size: 10px;
+}
+
+.leetally-auth-divider::before,
+.leetally-auth-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: #3f3f46;
+}
+
+.leetally-auth-links {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+}
+
+.leetally-auth-links button {
+  padding: 0;
+  color: #a1a1aa;
+  background: transparent;
+  border: 0;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.leetally-auth-notice {
+  margin: 9px 0 0;
+  color: #a7f3d0;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .leetally-transcript-section {
@@ -296,3 +405,280 @@ input {
   margin-top: 10px;
   font-size: 12px;
 }
+
+.leetally-feedback {
+  position: absolute;
+  right: 0;
+  bottom: 128px;
+  width: 214px;
+  padding: 13px;
+  color: #f5f7f6;
+  background: #171c1a;
+  border: 1px solid #34433e;
+  border-radius: 13px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+.leetally-score-hero { display:flex; align-items:center; gap:10px; margin:8px 0; }
+.leetally-score-hero b { font-size:28px; color:#31e6c1; }
+.leetally-score-hero span { text-transform:capitalize; color:#c7d2da; }
+.leetally-score-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:10px 0; }
+.leetally-score-grid .leetally-score-dimension { display:grid; grid-template-columns:1fr auto; gap:4px 8px; padding:6px 8px; background:rgba(255,255,255,.06); border-radius:7px; text-transform:capitalize; }
+.leetally-score-dimension ul { grid-column:1 / -1; margin:2px 0 0; padding-left:14px; color:#9eabb5; font-size:9px; text-transform:none; }
+.conversation-title { display:flex; flex:1; align-items:center; justify-content:space-between; gap:8px; }
+.conversation-title > span { padding:2px 6px; color:#101818; background:#31e6c1; border-radius:999px; font-size:8px; font-weight:800; text-transform:uppercase; }
+.leetally-data-disclosure { margin:8px 0;padding:8px;color:#b8c4ca;background:#121b1b;border:1px solid #344244;border-radius:8px;font-size:9px;line-height:1.4 }.leetally-data-disclosure strong{display:block;color:#fff}.leetally-data-disclosure p{margin:3px 0 0}.leetally-policy-consent{display:flex;align-items:flex-start;gap:6px;margin:6px 0 9px;color:#9eabb5;font-size:8px;line-height:1.4}.leetally-policy-consent input{margin-top:2px;accent-color:#31e6c1}.leetally-policy-consent a{color:#31e6c1}
+.leetally-feedback ol { margin:6px 0 0; padding-left:20px; }
+.leetally-feedback li { margin:4px 0; }
+
+.leetally-feedback header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.leetally-feedback header button {
+  color: #9eaaa6;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.leetally-feedback p {
+  margin: 9px 0 0;
+  color: #b7c2be;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.leetally-conversation {
+  position: absolute;
+  right: -8px;
+  bottom: 166px;
+  width: 270px;
+  max-height: 290px;
+  overflow: hidden;
+  padding: 11px;
+  color: #eef6f7;
+  background: rgba(8, 14, 22, 0.97);
+  border: 1px solid rgba(95, 132, 160, 0.34);
+  border-radius: 18px 18px 5px 18px;
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.62);
+  user-select: text;
+  backdrop-filter: blur(14px);
+}
+
+.leetally-conversation::after {
+  position: absolute;
+  right: 24px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  background: #080e16;
+  border-right: 1px solid rgba(95, 132, 160, 0.34);
+  border-bottom: 1px solid rgba(95, 132, 160, 0.34);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.leetally-conversation header {
+  display: grid;
+  grid-template-columns: 8px 1fr 24px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 9px;
+}
+
+.leetally-conversation header strong {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.leetally-conversation header button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: #84939f;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.conversation-presence {
+  width: 7px;
+  height: 7px;
+  background: #768696;
+  border-radius: 50%;
+}
+
+.conversation-presence.mode-listening,
+.conversation-presence.mode-user-speaking {
+  background: #22d3ee;
+  box-shadow: 0 0 9px #22d3ee;
+}
+
+.conversation-presence.mode-thinking,
+.conversation-presence.mode-ai-speaking {
+  background: #c26bf1;
+  box-shadow: 0 0 9px #c26bf1;
+}
+
+.conversation-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 235px;
+  overflow-y: auto;
+  padding: 1px 2px 5px;
+  scrollbar-width: thin;
+  scrollbar-color: #344756 transparent;
+}
+
+.conversation-message {
+  max-width: 88%;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+}
+
+.candidate-message {
+  align-self: flex-end;
+  color: #06181a;
+  background: #38d5cc;
+  border-bottom-right-radius: 4px;
+}
+
+.interviewer-message {
+  align-self: flex-start;
+  color: #eef2ff;
+  background: #252b3d;
+  border: 1px solid rgba(165, 117, 230, 0.2);
+  border-bottom-left-radius: 4px;
+}
+
+.conversation-activity {
+  align-self: flex-start;
+  margin: 1px 7px;
+  color: #8ea0ac;
+  font-size: 10px;
+  font-style: italic;
+}
+
+.leetally-dashboard {
+  position: absolute;
+  right: 0;
+  bottom: 128px;
+  width: 214px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+  color: #f8fafc;
+  background: #181919;
+  border: 1px solid #414547;
+  border-radius: 13px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.7);
+  user-select: text;
+  scrollbar-color: #666 #282929;
+}
+
+.dashboard-topbar,
+.dashboard-profile,
+.dashboard-actions,
+.dashboard-card header,
+.sheet-heading,
+.sheet-controls,
+.daily-card > div {
+  display: flex;
+  align-items: center;
+}
+
+.dashboard-topbar { justify-content: space-between; margin-bottom: 10px; }
+.dashboard-profile { gap: 8px; min-width: 0; }
+.dashboard-avatar {
+  display: grid; place-items: center; flex: 0 0 auto;
+  width: 30px; height: 30px; border-radius: 50%;
+  color: #10221f; background: linear-gradient(145deg, #66e1cf, #b8fff2);
+  font-weight: 900;
+}
+.dashboard-profile div { min-width: 0; }
+.dashboard-profile strong { display: block; overflow: hidden; max-width: 75px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-profile span { display: none; }
+.dashboard-actions { gap: 5px; color: #ff9f1a; font-size: 10px; white-space: nowrap; }
+.dashboard-actions button { padding: 1px; color: #a8afb5; background: none; border: 0; font-size: 14px; cursor: pointer; }
+
+.dashboard-card {
+  margin-top: 8px; padding: 10px;
+  background: #252626; border: 1px solid #363838; border-radius: 11px;
+}
+.dashboard-card header { justify-content: space-between; margin-bottom: 9px; }
+.dashboard-card header strong { font-size: 12px; }
+.dashboard-card header span { color: #aeb7c7; font-size: 9px; }
+.dashboard-card header b { color: #12cbb7; }
+.solved-card { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+.solved-card > span, .solved-card > div { color: #adb5c4; font-size: 10px; }
+.solved-card > strong { font-size: 14px; text-align: right; }
+.solved-card b { margin-right: 5px; }
+.easy { color: #00bfa5; } .medium { color: #ffad1f; } .hard { color: #ff4267; }
+
+.activity-card header span { display: flex; align-items: center; gap: 7px; }
+.activity-card header i { width: 17px; height: 17px; background: #303232; border-radius: 50%; }
+.activity-card header i:nth-last-of-type(3) { background: #205851; }
+.activity-card header i:nth-last-of-type(2) { background: #168679; }
+.activity-card header i:last-of-type { background: #0fc6b2; }
+.activity-grid { display: grid; grid-template-rows: repeat(3, 13px); grid-auto-flow: column; grid-auto-columns: minmax(8px, 1fr); gap: 3px; }
+.activity-cell { background: #303232; border-radius: 7px; }
+.activity-cell.level-1 { background: #205851; } .activity-cell.level-2 { background: #168679; } .activity-cell.level-3 { background: #0fc6b2; }
+.activity-cell.today { outline: 2px solid #f59e0b; outline-offset: -2px; }
+.activity-card footer { display: flex; justify-content: space-between; margin-top: 7px; color: #8d97a6; font-size: 9px; }
+
+.sheets-card small { color: #7f8589; font-size: 14px; cursor: help; }
+.sheet-row + .sheet-row { margin-top: 10px; }
+.sheet-heading { justify-content: space-between; margin-bottom: 9px; }
+.sheet-heading a { color: #f8fafc; font-size: 10px; font-weight: 700; text-decoration: none; }
+.sheet-heading span { color: #f8fafc; font-size: 9px; }
+.sheet-heading b { margin-left: 7px; }
+.sheet-controls { gap: 8px; }
+.sheet-controls button { width: 24px; height: 24px; padding: 0; color: #c9d1d9; background: #353737; border: 0; border-radius: 6px; cursor: pointer; }
+.sheet-track { flex: 1; height: 6px; overflow: hidden; background: #414242; border-radius: 99px; }
+.sheet-track i { display: block; height: 100%; border-radius: inherit; transition: width 180ms ease; }
+
+.daily-card a { display: block; margin-bottom: 8px; color: #c5cedd; font-size: 10px; text-decoration: none; }
+.daily-card > div { justify-content: space-between; }
+.difficulty { padding: 5px 9px; border-radius: 7px; font-weight: 800; text-transform: capitalize; }
+.difficulty.easy { background: rgba(0,191,165,.14); } .difficulty.medium { background: rgba(255,173,31,.14); } .difficulty.hard { background: rgba(255,66,103,.14); }
+.daily-card button { padding: 9px 14px; color: #10221f; background: #16c9b3; border: 0; border-radius: 9px; font-weight: 800; cursor: pointer; }
+.daily-card button:disabled { color: #9ca3af; background: #3b3d3d; cursor: default; }
+.dashboard-loading { padding: 40px; text-align: center; color: #aeb7c7; }
+
+@media (max-width: 720px) {
+  .leetally-dashboard { padding: 13px; }
+  .dashboard-card { padding: 20px 16px; }
+  .solved-card { grid-template-columns: auto 1fr; gap: 12px; }
+  .solved-card > div { text-align: right; }
+  .dashboard-profile span { display: none; }
+}
+
+/* LeetAlly website-aligned blue system */
+.leetally-shell{color:#f2f6ff;font-family:Inter,"Segoe UI",system-ui,sans-serif}
+.leetally-creature{width:104px;height:104px;background:radial-gradient(circle at 38% 28%,#17396a,#081323 58%,#05080d 100%);border-color:#3e6499;border-radius:50%;box-shadow:0 18px 48px #000a,inset 0 0 36px #4d8dff1f,0 0 44px #4d8dff21}
+.leetally-creature.mode-listening,.leetally-creature.mode-user-speaking,.leetally-creature.mode-thinking,.leetally-creature.mode-ai-speaking{border-color:#6d9de6;box-shadow:0 18px 48px #000a,inset 0 0 34px #4d8dff2b,0 0 42px #4d8dff3d}
+.leetally-mark-status,.leetally-creature.mode-listening .leetally-mark-status,.leetally-creature.mode-user-speaking .leetally-mark-status,.leetally-creature.mode-thinking .leetally-mark-status,.leetally-creature.mode-ai-speaking .leetally-mark-status{color:#a8caff;background:#a8caff;box-shadow:0 0 11px #4d8dff}
+.leetally-controls{background:#070b12f5;border-color:#263753;box-shadow:0 12px 34px #0009}
+.leetally-controls button{color:#dbe8ff;background:#0c1421;border-color:#2b3c58;transition:background-color 160ms ease,border-color 160ms ease,transform 160ms ease}
+.leetally-controls button:hover{background:#142847;border-color:#5681be}.leetally-controls button:active{transform:scale(.94)}
+.leetally-panel,.leetally-feedback,.leetally-conversation,.leetally-dashboard{color:#f2f6ff;background:linear-gradient(145deg,#0a111df2,#050910fa);border-color:#2c4262;box-shadow:0 22px 60px #000b;backdrop-filter:blur(16px)}
+.leetally-panel{border-radius:20px}.leetally-panel input{color:#f2f6ff;background:#060a11;border-color:#293b57}.leetally-panel input:focus{border-color:#a8caff}
+.leetally-login,.leetally-google-login{color:#061126;background:#a8caff;border-radius:999px}.leetally-logout{background:#101a29;border-radius:999px}
+.leetally-score-hero b,.leetally-policy-consent a{color:#a8caff}.conversation-title>span{color:#061126;background:#a8caff}
+.leetally-score-grid .leetally-score-dimension,.dashboard-card{background:#0b121d;border:1px solid #202f46}
+.leetally-data-disclosure{color:#aab6c6;background:#080e17;border-color:#2b3d59}.leetally-policy-consent input{accent-color:#a8caff}
+.leetally-conversation::after{background:#080d16;border-color:#2c4262}.conversation-presence.mode-listening,.conversation-presence.mode-user-speaking,.conversation-presence.mode-thinking,.conversation-presence.mode-ai-speaking{background:#a8caff;box-shadow:0 0 10px #4d8dff}
+.candidate-message{color:#061126;background:#a8caff}.interviewer-message{color:#eef4ff;background:#111d30;border-color:#315181}.conversation-messages{scrollbar-color:#34527d transparent}
+.dashboard-avatar{color:#061126;background:#a8caff}.dashboard-card header b{color:#a8caff}
+.activity-card header i,.activity-cell{background:#182235}.activity-card header i:nth-last-of-type(3),.activity-cell.level-1{background:#244a81}.activity-card header i:nth-last-of-type(2),.activity-cell.level-2{background:#356dc0}.activity-card header i:last-of-type,.activity-cell.level-3{background:#78a9f8}
+.sheet-controls button{color:#d7e5fa;background:#111c2c}.sheet-track{background:#1c293b}.daily-card button{color:#061126;background:#a8caff}
+.leetally-feedback{border-radius:18px}.leetally-conversation{border-radius:20px 20px 6px 20px}.leetally-dashboard{border-radius:20px;scrollbar-color:#34527d #090e17}

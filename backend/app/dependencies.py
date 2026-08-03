@@ -12,17 +12,26 @@ from .adapters import (
     OpenAIRealtimeVoiceProvider,
     SupabaseAuthProvider,
     DeepgramTranscriptionProvider,
+    FishAudioSpeechProvider,
 )
 from .config import Settings, get_settings
+from .billing import (
+    BillingRepository,
+    CashfreeClient,
+    InMemoryBillingRepository,
+    SupabaseBillingRepository,
+)
 from .domain import (
     AuthenticatedUser,
     AuthProvider,
     InterviewRepository,
     RealtimeVoiceProvider,
+    SpeechProvider,
 )
 
 
 repository = InMemoryInterviewRepository()
+billing_repository = InMemoryBillingRepository()
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -47,6 +56,12 @@ def get_ai_provider(
     settings: Settings = Depends(get_settings),
 ) -> GroqAIProvider:
     return GroqAIProvider(settings)
+
+def get_speech_provider(
+    settings: Settings = Depends(get_settings),
+) -> SpeechProvider:
+    return FishAudioSpeechProvider(settings)
+
 
 async def current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(
@@ -80,3 +95,22 @@ async def current_user(
 
 def get_repository() -> InterviewRepository:
     return repository
+
+
+def get_billing_repository(
+    settings: Settings = Depends(get_settings),
+) -> BillingRepository:
+    if settings.supabase_service_role_key:
+        return SupabaseBillingRepository(settings)
+    if settings.billing_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The persistent billing store is not configured.",
+        )
+    return billing_repository
+
+
+def get_cashfree_client(
+    settings: Settings = Depends(get_settings),
+) -> CashfreeClient:
+    return CashfreeClient(settings)

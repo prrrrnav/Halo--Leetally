@@ -9,13 +9,19 @@ export default defineConfig({
       "Practice LeetCode with an AI interviewer.",
     version: "0.1.0",
 
-    permissions: ["storage"],
+    permissions: ["storage", "activeTab", "identity"],
 
     host_permissions: [
       "http://127.0.0.1:8000/*",
       "http://localhost:8000/*",
       "https://*.supabase.co/*",
       "https://leetcode.com/*",
+      "https://neetcode.io/*",
+      "https://takeuforward.org/*",
+      "https://www.techinterviewhandbook.org/*",
+      "https://namastedev.com/*",
+      "https://www.codingninjas.com/*",
+      "https://raw.githubusercontent.com/*",
     ],
 
     content_security_policy: {
