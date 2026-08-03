@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     openai_api_key: str
     openai_realtime_model: str = "gpt-realtime"
     openai_voice: str = "marin"
+    realtime_voice_enabled: bool = False
 
     deepgram_api_key: str | None = None
     deepgram_model: str = "nova-3"
@@ -25,9 +26,20 @@ class Settings(BaseSettings):
     fish_audio_reference_id: str | None = None
     fish_audio_format: str = "mp3"
     fish_audio_latency: str = "balanced"
-    fish_audio_speed: float = 1.0
+    fish_audio_speed: float = 0.9
 
     cors_origins: str = "http://localhost:5173"
+
+    billing_enabled: bool = False
+    supabase_service_role_key: str | None = None
+    cashfree_client_id: str | None = None
+    cashfree_client_secret: str | None = None
+    cashfree_environment: str = "sandbox"
+    cashfree_api_version: str = "2025-01-01"
+    billing_return_url: str = "http://localhost:8000/api/v1/billing/return"
+    cashfree_webhook_tolerance_seconds: int = 300
+    minimum_billable_speech_ms: int = 400
+    minimum_speech_rms: float = 0.003
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -10,6 +10,8 @@ from .domain import (
     AuthenticatedUser,
     AuthProvider,
     Interview,
+    InterviewTurn,
+    CodeSnapshot,
     InterviewRepository,
     InterviewScreenContext,
     PaymentProvider,
@@ -17,6 +19,7 @@ from .domain import (
     SpeechProvider,
     SynthesizedSpeech,
 )
+from .voice_profiles import company_interview_style
 
 
 # =========================================================
@@ -145,10 +148,45 @@ class InMemoryInterviewRepository(InterviewRepository):
             status="created",
             created_at=datetime.now(timezone.utc),
             screen_context=screen_context,
+            target_company=data.get("target_company"),
+            interview_type=data.get("interview_type", "dsa"),
         )
 
         self.items[interview.id] = interview
 
+        return interview
+
+    async def add_turn(
+        self,
+        interview_id: str,
+        user_id: str,
+        candidate_message: str,
+        interviewer_message: str,
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
+        if interview is None or interview.status == "completed":
+            return None
+        interview.status = "in_progress"
+        interview.turns.append(InterviewTurn(
+            candidate_message=candidate_message,
+            interviewer_message=interviewer_message,
+            created_at=datetime.now(timezone.utc),
+            code=interview.code or "",
+        ))
+        return interview
+
+    async def complete(
+        self,
+        interview_id: str,
+        user_id: str,
+        assessment: dict[str, Any],
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
+        if interview is None:
+            return None
+        interview.status = "completed"
+        interview.completed_at = datetime.now(timezone.utc)
+        interview.assessment = assessment
         return interview
 
     async def get(
@@ -179,6 +217,18 @@ class InMemoryInterviewRepository(InterviewRepository):
 
         if interview is None:
             return None
+
+        next_code = data.get("code")
+        if next_code is not None and next_code != (interview.code or ""):
+            interview.code_snapshots.append(CodeSnapshot(
+                code=next_code,
+                programming_language=(
+                    data.get("programming_language")
+                    or interview.programming_language
+                    or "Unknown"
+                ),
+                created_at=datetime.now(timezone.utc),
+            ))
 
         for field_name, field_value in data.items():
             if field_value is not None:
@@ -391,6 +441,7 @@ class FishAudioSpeechProvider(SpeechProvider):
     async def synthesize(
         self,
         text: str,
+        reference_id: str | None = None,
     ) -> SynthesizedSpeech:
         normalized_text = text.strip()
 
@@ -413,8 +464,9 @@ class FishAudioSpeechProvider(SpeechProvider):
 
         # reference_id selects the Fish Audio voice.
         # If omitted, Fish Audio uses its default voice.
-        if self._reference_id:
-            payload["reference_id"] = self._reference_id
+        selected_reference_id = reference_id or self._reference_id
+        if selected_reference_id:
+            payload["reference_id"] = selected_reference_id
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -698,8 +750,57 @@ class GroqAIProvider(AIProvider):
             keep_end=True,
         )
 
+        target_company = getattr(interview, "target_company", None)
+        company_style = company_interview_style(target_company)
+        interview_type = getattr(interview, "interview_type", "dsa")
+        type_guidance = {
+            "dsa": "Conduct a data structures and algorithms coding interview grounded in the active LeetCode problem. Require clarification, approach, implementation, testing, and complexity evidence.",
+            "behavioral": "Conduct a behavioural interview only. Ask SDE-1 questions about ownership, conflict, teamwork, failure, deadlines, learning, and trade-offs. Require specific STAR evidence and probe vague claims. Do not ask the candidate to solve or code the visible LeetCode problem.",
+            "lld": "Conduct a low-level design interview. Give or continue one realistic SDE-1 object-oriented design problem. Evaluate requirements, entities, responsibilities, interfaces, relationships, extensibility, patterns, and testability. Do not turn the round into a DSA solution walkthrough.",
+            "hld": "Conduct a high-level system design interview calibrated for SDE-1. Give or continue one approachable system problem. Evaluate requirements, scale assumptions, APIs, data model, components, data flow, reliability, bottlenecks, and trade-offs. Do not turn the round into a DSA solution walkthrough.",
+        }.get(interview_type, "Conduct a data structures and algorithms interview.")
+        conversation_history = "\n".join(
+            f"Candidate: {turn.candidate_message}\nInterviewer: {turn.interviewer_message}"
+            for turn in interview.turns[-6:]
+        )
+        dsa_phase_guidance = {
+            "clarification": "Ask the candidate to clarify constraints, inputs, outputs, and assumptions.",
+            "approach": "Require an ordered approach and justification before substantial coding.",
+            "coding": "Observe implementation and probe decisions without giving away code.",
+            "testing": "Ask for a dry run, boundary cases, and interpretation of visible output.",
+            "complexity": "Ask for explicit time and space complexity with justification.",
+            "wrap_up": "Ask one concise follow-up, then let the candidate conclude.",
+        }.get(interview.phase, "Continue the interview naturally.")
+        design_phase_guidance = {
+            "clarification": "Clarify functional requirements, scope, actors, and constraints.",
+            "approach": "Ask for the major entities or components and an ordered design approach.",
+            "coding": "Probe interfaces, responsibilities, data flow, and the most important design decisions.",
+            "testing": "Probe failure cases, testability, extensibility, reliability, and boundary conditions.",
+            "complexity": "Ask for bottlenecks, scale limits, and explicit trade-offs.",
+            "wrap_up": "Ask one concise design follow-up, then let the candidate conclude.",
+        }.get(interview.phase, "Continue the design interview naturally.")
+        behavioral_phase_guidance = {
+            "clarification": "Ask for one specific situation and the candidate's personal responsibility.",
+            "approach": "Probe the task, constraints, stakeholders, and choices available.",
+            "coding": "Probe the candidate's own actions, decisions, communication, and trade-offs.",
+            "testing": "Probe the measurable result, feedback, and what did not go as planned.",
+            "complexity": "Ask what the candidate learned and what they would change next time.",
+            "wrap_up": "Ask one concise behavioural follow-up, then conclude the example.",
+        }.get(interview.phase, "Continue the behavioural interview naturally.")
+        phase_guidance = behavioral_phase_guidance if interview_type == "behavioral" else design_phase_guidance if interview_type in {"lld", "hld"} else dsa_phase_guidance
+
         return f"""
 You are conducting a realistic software engineering interview.
+
+The candidate is being evaluated for an SDE-1 role. Evaluate fundamentals,
+clear reasoning, implementation, complexity analysis, testing, and coachability.
+
+INTERVIEW TYPE: {interview_type.upper()}
+TYPE-SPECIFIC INSTRUCTIONS: {type_guidance}
+
+CURRENT INTERVIEW PHASE: {interview.phase}
+PHASE OBJECTIVE: {phase_guidance}
+Do not skip ahead unless the candidate has supplied evidence for the current phase.
 
 Act as an interviewer, not as a tutor.
 
@@ -716,12 +817,19 @@ Rules:
 - Ask about edge cases only when relevant.
 - Correct incorrect reasoning by asking a focused question.
 - Avoid generic praise.
-- If the transcript is unclear or unrelated, ask the candidate to clarify.
 - Never claim code passed unless the visible output confirms it.
+- Respect candidate pacing and conversation-control requests.
+- If the candidate asks you to slow down, pause, wait, repeat, or not rush, acknowledge the request and do not ask another technical question.
+- When asked not to rush, respond naturally, for example: "Of course. Take your time, and tell me when you're ready to continue."
+- Do not redirect a pacing request back to the coding problem.
+- If the candidate's transcript appears incomplete or ends abruptly, ask them to continue instead of advancing the interview.
+- Treat conversational and clarification requests as valid interview dialogue.
 
 Problem title: {problem_title}
 Difficulty: {difficulty or "Unknown"}
 Language: {programming_language or "Unknown"}
+Target company: {target_company or "General"}
+Company simulation style: {company_style}
 
 Problem description:
 {problem_description or "Not available"}
@@ -731,6 +839,9 @@ Visible code:
 
 Visible output:
 {visible_output or "No output available"}
+
+Recent conversation:
+{conversation_history or "No previous turns"}
 """.strip()
 
 

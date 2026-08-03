@@ -1,4 +1,11 @@
 import base64
+import hashlib
+import time
+import io
+import math
+import struct
+import wave
+from datetime import datetime, timezone
 from fastapi import (
     Depends,
     FastAPI,
@@ -6,7 +13,9 @@ from fastapi import (
     HTTPException,
     UploadFile,
     status,
+    Request,
 )
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .adapters import (
@@ -18,6 +27,17 @@ from .adapters import (
     TranscriptionServiceError,
 )
 from .config import get_settings
+from .billing import (
+    PLANS,
+    BillingConfigurationError,
+    BillingProviderError,
+    BillingRepository,
+    CashfreeClient,
+    cashfree_webhook_unix_seconds,
+    parse_lifecycle_webhook,
+    parse_successful_webhook,
+    verify_cashfree_signature,
+)
 from .dependencies import (
     current_user,
     get_ai_provider,
@@ -25,6 +45,8 @@ from .dependencies import (
     get_speech_provider,
     get_repository,
     get_transcription_provider,
+    get_billing_repository,
+    get_cashfree_client,
 )
 from .domain import (
     AuthenticatedUser,
@@ -38,11 +60,18 @@ from .schemas import (
     InterviewCreate,
     InterviewOut,
     InterviewTurnOut,
+    InterviewCompleteIn,
+    InterviewAssessmentOut,
     RealtimeSessionCreate,
     SpeechSynthesisIn,
     SpeechSynthesisOut,
     UserOut,
+    BillingCheckoutIn,
+    BillingCheckoutOut,
+    BillingEntitlementOut,
+    BillingPlanOut,
 )
+from .voice_profiles import company_voice_reference
 
 
 settings = get_settings()
@@ -55,13 +84,12 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=list(dict.fromkeys([
         "https://leetcode.com",
         "https://www.leetcode.com",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
-    allow_origin_regex=r"(chrome-extension|opera-extension)://.*",
+        *settings.cors_origin_list,
+    ])),
+    allow_origin_regex=r"(chrome-extension|opera-extension)://.*|https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=[
         "GET",
@@ -72,6 +100,7 @@ app.add_middleware(
     allow_headers=[
         "Authorization",
         "Content-Type",
+        "Idempotency-Key",
     ],
 )
 
@@ -82,6 +111,148 @@ async def health() -> dict[str, str]:
         "status": "ok",
         "version": app.version,
     }
+
+
+@app.get("/api/v1/billing/plans", response_model=list[BillingPlanOut])
+async def billing_plans():
+    return [plan.public_dict() for plan in PLANS.values()]
+
+
+@app.post("/api/v1/billing/checkout", response_model=BillingCheckoutOut)
+async def create_billing_checkout(
+    payload: BillingCheckoutIn,
+    user: AuthenticatedUser = Depends(current_user),
+    repository: BillingRepository = Depends(get_billing_repository),
+):
+    if not settings.billing_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not enabled yet.",
+        )
+    try:
+        provider = get_cashfree_client(settings)
+        plan = PLANS[payload.plan_id]
+        checkout = await provider.create_checkout(
+            user=user,
+            plan=plan,
+            customer_name=payload.customer_name,
+            phone=payload.phone,
+            auto_renew=payload.auto_renew,
+        )
+        await repository.save_checkout(checkout)
+    except BillingConfigurationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(error),
+        ) from error
+    except BillingProviderError as error:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(error),
+        ) from error
+    return {
+        "reference": checkout.reference,
+        "plan_id": checkout.plan_id,
+        "purchase_type": checkout.purchase_type,
+        "amount_inr": checkout.amount_inr,
+        "currency": checkout.currency,
+        "session_id": checkout.provider_session_id,
+        "environment": settings.cashfree_environment,
+    }
+
+
+@app.get("/api/v1/billing/me", response_model=BillingEntitlementOut)
+async def billing_me(
+    user: AuthenticatedUser = Depends(current_user),
+    repository: BillingRepository = Depends(get_billing_repository),
+):
+    entitlement = await repository.get_entitlement(user.id)
+    if entitlement is None:
+        return {"status": "none"}
+    return entitlement.public_dict()
+
+
+@app.post("/api/v1/billing/webhooks/cashfree")
+async def cashfree_webhook(
+    request: Request,
+    repository: BillingRepository = Depends(get_billing_repository),
+):
+    if not settings.billing_enabled or not settings.cashfree_client_secret:
+        raise HTTPException(status_code=503, detail="Billing is not configured.")
+    raw_body = await request.body()
+    timestamp = request.headers.get("x-webhook-timestamp", "")
+    signature = request.headers.get("x-webhook-signature", "")
+    try:
+        webhook_time = cashfree_webhook_unix_seconds(timestamp)
+    except ValueError as error:
+        raise HTTPException(status_code=401, detail="Invalid webhook timestamp.") from error
+    if abs(int(time.time()) - webhook_time) > settings.cashfree_webhook_tolerance_seconds:
+        raise HTTPException(status_code=401, detail="Expired webhook timestamp.")
+    if not verify_cashfree_signature(
+        raw_body, timestamp, signature, settings.cashfree_client_secret
+    ):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+    payload_hash = hashlib.sha256(raw_body).hexdigest()
+    event_id = request.headers.get("x-idempotency-key") or payload_hash
+    try:
+        reference, event_type, amount, currency = parse_successful_webhook(raw_body)
+    except ValueError:
+        try:
+            reference, event_type, next_status, auto_renew = parse_lifecycle_webhook(raw_body)
+        except ValueError:
+            return {"accepted": True, "activated": False}
+        checkout = await repository.get_checkout(reference)
+        if checkout is None:
+            return {"accepted": True, "activated": False}
+        changed = await repository.update_lifecycle(
+            reference, event_id, event_type, payload_hash, next_status, auto_renew
+        )
+        return {"accepted": True, "activated": False, "updated": changed}
+    checkout = await repository.get_checkout(reference)
+    if checkout is None:
+        raise HTTPException(status_code=404, detail="Unknown billing reference.")
+    if amount != checkout.amount_inr or currency != checkout.currency:
+        raise HTTPException(status_code=400, detail="Payment amount or currency mismatch.")
+    if checkout.purchase_type == "one_time":
+        try:
+            provider = get_cashfree_client(settings)
+            is_paid = await provider.verify_paid_order(reference, PLANS[checkout.plan_id])
+        except (BillingConfigurationError, BillingProviderError) as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        if not is_paid:
+            raise HTTPException(status_code=400, detail="Cashfree order is not paid.")
+    activated = await repository.activate(
+        checkout=checkout,
+        event_id=event_id,
+        event_type=event_type,
+        payload_hash=payload_hash,
+    )
+    return {"accepted": True, "activated": activated}
+
+
+@app.post("/api/v1/billing/cancel")
+async def cancel_billing_renewal(
+    user: AuthenticatedUser = Depends(current_user),
+    repository: BillingRepository = Depends(get_billing_repository),
+):
+    entitlement = await repository.get_entitlement(user.id)
+    if entitlement is None or not entitlement.auto_renew or not entitlement.provider_reference:
+        raise HTTPException(status_code=409, detail="There is no active automatic renewal to cancel.")
+    try:
+        provider = get_cashfree_client(settings)
+        await provider.cancel_subscription(entitlement.provider_reference)
+        await repository.cancel_renewal(entitlement.provider_reference)
+    except (BillingConfigurationError, BillingProviderError) as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {"cancelled": True, "access_until": entitlement.period_end}
+
+
+@app.get("/api/v1/billing/return", response_class=HTMLResponse)
+async def billing_return():
+    return HTMLResponse(
+        "<main><h1>Payment received</h1>"
+        "<p>You can close this tab and return to LeetAlly.</p></main>"
+    )
 
 
 @app.get(
@@ -153,6 +324,7 @@ async def submit_interview_audio(
     speech_provider: SpeechProvider = Depends(
         get_speech_provider
     ),
+    billing_repository: BillingRepository = Depends(get_billing_repository),
 ) -> InterviewTurnOut:
     interview = await repository.get(
         interview_id=interview_id,
@@ -173,7 +345,6 @@ async def submit_interview_audio(
     )
 
     allowed_content_types = {
-        "audio/webm",
         "audio/wav",
         "audio/x-wav",
     }
@@ -200,6 +371,26 @@ async def submit_interview_audio(
             detail="The uploaded audio file is too large.",
         )
 
+    speech_duration_seconds, speech_rms = _inspect_pcm_wav(audio_bytes, content_type)
+    if speech_duration_seconds < settings.minimum_billable_speech_ms / 1000:
+        return InterviewTurnOut(
+            transcript="",
+            interviewer_message="",
+        )
+    if speech_rms is not None and speech_rms < settings.minimum_speech_rms:
+        return InterviewTurnOut(
+            transcript="",
+            interviewer_message="",
+        )
+
+    if settings.billing_enabled:
+        entitlement = await billing_repository.get_entitlement(user.id)
+        if entitlement is None or entitlement.status != "active":
+            raise HTTPException(status_code=402, detail="No active interview entitlement.")
+        remaining_seconds = entitlement.minutes_limit * 60 - entitlement.speech_seconds_used
+        if math.ceil(speech_duration_seconds) > remaining_seconds:
+            raise HTTPException(status_code=402, detail="Speech allowance exceeded.")
+
     print(
         "Received interview audio:",
         {
@@ -210,6 +401,8 @@ async def submit_interview_audio(
             "size_bytes": len(audio_bytes),
         },
     )
+
+    interview.phase = _advance_sde1_phase(interview, transcript)
 
     try:
         transcript = await transcription_provider.transcribe(
@@ -252,6 +445,27 @@ async def submit_interview_audio(
             detail=str(error),
         ) from error
 
+    if settings.billing_enabled:
+        usage_event_id = hashlib.sha256(
+            interview_id.encode("utf-8") + audio_bytes
+        ).hexdigest()
+        try:
+            await billing_repository.consume_speech_seconds(
+                user_id=user.id,
+                event_id=usage_event_id,
+                interview_id=interview_id,
+                seconds=max(1, math.ceil(speech_duration_seconds)),
+            )
+        except BillingProviderError as error:
+            raise HTTPException(status_code=402, detail=str(error)) from error
+
+    await repository.add_turn(
+        interview_id=interview_id,
+        user_id=user.id,
+        candidate_message=transcript,
+        interviewer_message=interviewer_message,
+    )
+
     print(
         "Groq interviewer response:",
         {
@@ -265,7 +479,11 @@ async def submit_interview_audio(
 
     try:
         synthesized_speech = await speech_provider.synthesize(
-            interviewer_message
+            interviewer_message,
+            company_voice_reference(
+                interview.target_company,
+                settings.fish_audio_reference_id,
+            ),
         )
 
     except SpeechServiceError as error:
@@ -328,7 +546,145 @@ async def submit_interview_audio(
         interviewer_audio_content_type=(
             interviewer_audio_content_type
         ),
+        phase=interview.phase,
     )
+
+
+def _advance_sde1_phase(interview, candidate_message: str) -> str:
+    """Advance monotonically when observable evidence satisfies a phase."""
+    order = ["clarification", "approach", "coding", "testing", "complexity", "wrap_up"]
+    current_index = order.index(interview.phase) if interview.phase in order else 0
+    text = candidate_message.lower()
+    transcript = " ".join(turn.candidate_message.lower() for turn in interview.turns) + " " + text
+    has_clarification = any(term in transcript for term in (
+        "constraint", "assume", "input", "output", "duplicate", "sorted", "clarify"
+    )) or len(interview.turns) >= 1
+    has_approach = any(term in transcript for term in (
+        "approach", "first", "then", "because", "hash map", "two pointer", "iterate", "recursive"
+    ))
+    has_code = len((interview.code or "").strip()) >= 40
+    has_testing = any(term in transcript for term in (
+        "test", "dry run", "edge case", "empty", "single element", "boundary", "example"
+    )) or bool(interview.visible_output)
+    has_complexity = any(term in transcript for term in (
+        "complexity", "time is", "space is", "o(", "big o"
+    ))
+    evidence = [has_clarification, has_approach, has_code, has_testing, has_complexity]
+    next_index = current_index
+    while next_index < len(evidence) and evidence[next_index]:
+        next_index += 1
+    return order[min(next_index, len(order) - 1)]
+
+
+def _inspect_pcm_wav(audio_bytes: bytes, content_type: str) -> tuple[float, float | None]:
+    """Return trusted duration and RMS for our PCM WAV voice segments.
+
+    Other allowed formats retain a conservative byte-derived duration of zero;
+    the current extension always uploads PCM WAV.
+    """
+    if content_type not in {"audio/wav", "audio/x-wav"}:
+        return 0.0, None
+    try:
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+            width = wav_file.getsampwidth()
+            channels = wav_file.getnchannels()
+            if rate <= 0 or width != 2 or channels != 1:
+                return 0.0, None
+            raw = wav_file.readframes(frames)
+    except (wave.Error, EOFError):
+        return 0.0, None
+    sample_count = len(raw) // 2
+    if sample_count == 0:
+        return 0.0, 0.0
+    samples = struct.unpack(f"<{sample_count}h", raw)
+    rms = math.sqrt(sum(sample * sample for sample in samples) / sample_count) / 32768
+    return frames / rate, rms
+
+
+def _build_sde1_assessment(interview, duration_seconds: int) -> dict:
+    transcript = " ".join(turn.candidate_message for turn in interview.turns)
+    lowered = transcript.lower()
+    words = len(transcript.split())
+    code = interview.code or ""
+
+    def dimension(base: int, evidence: list[str], action: str) -> dict:
+        return {"score": max(1, min(10, base)), "evidence": evidence, "next_action": action}
+
+    approach = any(term in lowered for term in ("approach", "first", "then", "because", "iterate", "pointer", "hash", "recursive"))
+    complexity = "complexity" in lowered or "o(" in lowered or "time is" in lowered or "space is" in lowered
+    edges = any(term in lowered for term in ("edge case", "empty", "duplicate", "null", "single element", "overflow", "boundary"))
+    tests = any(term in lowered for term in ("test", "example", "dry run", "input"))
+    has_code = len(code.strip()) >= 40
+    turn_count = len(interview.turns)
+    revision_count = len(interview.code_snapshots)
+
+    dimensions = {
+        "communication": dimension(
+            3 + min(3, words // 70) + (2 if approach else 0),
+            [f"Explained reasoning across {turn_count} spoken response{'s' if turn_count != 1 else ''}.", f"Captured {words} words of candidate explanation."],
+            "Explain the solution in three ordered steps before writing code.",
+        ),
+        "problem_solving": dimension(
+            3 + (3 if approach else 0) + (1 if turn_count >= 3 else 0),
+            ["A structured approach was stated." if approach else "No clearly ordered approach was captured."],
+            "State the invariant and why the chosen data structure fits the constraints.",
+        ),
+        "implementation": dimension(
+            3 + (3 if has_code else 0) + (1 if interview.visible_output else 0),
+            [f"Captured {revision_count} distinct code revision{'s' if revision_count != 1 else ''}.", "Visible run output was captured." if interview.visible_output else "No confirmed run output was captured."],
+            "Finish a runnable implementation and validate it against representative inputs.",
+        ),
+        "complexity": dimension(
+            7 if complexity else 3,
+            ["Time or space complexity was discussed." if complexity else "No explicit time and space complexity statement was captured."],
+            "End every solution with explicit time and space complexity.",
+        ),
+        "testing": dimension(
+            3 + (2 if edges else 0) + (2 if tests else 0),
+            [("Edge cases were discussed." if edges else "No explicit edge-case discussion was captured."), ("A test or dry run was discussed." if tests else "No test walkthrough was captured.")],
+            "Dry-run one normal case and name at least two boundary cases.",
+        ),
+    }
+    overall = round(sum(item["score"] for item in dimensions.values()) / len(dimensions))
+    signal = "strong_hire" if overall >= 9 else "hire" if overall >= 7 else "lean_hire" if overall >= 5 else "not_yet"
+    ranked = sorted(dimensions.items(), key=lambda item: item[1]["score"])
+    improvements = [item[1]["next_action"] for item in ranked[:3]]
+    strengths = [name.replace("_", " ").title() for name, item in dimensions.items() if item["score"] >= 7]
+    return {
+        "interview_id": interview.id,
+        "level": "sde1",
+        "overall_score": overall,
+        "hiring_signal": signal,
+        "summary": f"SDE-1 signal: {signal.replace('_', ' ')}. Your strongest evidence and gaps are tied to the recorded conversation and final code.",
+        "dimensions": dimensions,
+        "strengths": strengths or ["Completed a realistic spoken coding practice session"],
+        "priority_improvements": improvements,
+        "next_drills": [f"Redo {interview.problem_title} with a 2-minute approach explanation before coding.", improvements[0], "Complete one timed medium problem and verbalize tests before running code."],
+        "duration_seconds": duration_seconds,
+        "completed_at": datetime.now(timezone.utc),
+    }
+
+
+@app.post(
+    "/api/v1/interviews/{interview_id}/complete",
+    response_model=InterviewAssessmentOut,
+)
+async def complete_interview(
+    interview_id: str,
+    payload: InterviewCompleteIn,
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+):
+    interview = await repository.get(interview_id, user.id)
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Interview not found.")
+    assessment = interview.assessment or _build_sde1_assessment(interview, payload.duration_seconds)
+    completed = await repository.complete(interview_id, user.id, assessment)
+    if completed is None:
+        raise HTTPException(status_code=404, detail="Interview not found.")
+    return assessment
 
 @app.post(
     "/api/v1/speech",
@@ -343,7 +699,11 @@ async def synthesize_speech(
 ) -> SpeechSynthesisOut:
     try:
         speech = await speech_provider.synthesize(
-            payload.text
+            payload.text,
+            company_voice_reference(
+                payload.company_id,
+                settings.fish_audio_reference_id,
+            ),
         )
 
     except SpeechServiceError as error:
@@ -376,6 +736,11 @@ async def create_realtime_session(
         get_realtime_voice_provider
     ),
 ):
+    if not settings.realtime_voice_enabled:
+        raise HTTPException(
+            status_code=404,
+            detail="Realtime streaming is disabled; speech-gated mode is active.",
+        )
     context = InterviewScreenContext(
         problem_title=payload.problem_title,
         problem_description=payload.problem_description,

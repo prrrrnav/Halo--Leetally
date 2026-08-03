@@ -9,7 +9,7 @@
 ## Day 2 — Authentication
 - [x] Mock and Supabase JWT verification adapters
 - [x] Protected `/auth/me` route
-- [ ] Add Supabase client login UI to extension
+- [x] Add Supabase client login UI to extension
 - [ ] Test signup, login, logout, expired token, and refresh
 
 ## Day 3 — Persistence
@@ -22,17 +22,17 @@
 - [x] Platform port and starter LeetCode extractor
 - [x] Floating widget and API client
 - [ ] Validate selectors on easy/medium/hard and old/new layouts
-- [ ] Add graceful unsupported-page state
+- [x] Add graceful unsupported-page state
 
 ## Day 5 — Interview loop
 - [x] Mock interviewer provider and message endpoint
-- [ ] Add interview state (intro, approach, coding, complexity, wrap-up)
+- [x] Add interview state (clarification, approach, coding, testing, complexity, wrap-up)
 - [ ] Persist messages and timestamps
-- [ ] Add End Interview and simple deterministic feedback
+- [x] Add End Interview and deterministic evidence-backed feedback
 
 ## Day 6 — Voice and hardening
 - [x] Browser speech adapter boundary
-- [ ] Wire browser speech recognition/synthesis behind explicit controls
+- [x] Wire speech recognition/synthesis behind local VAD and explicit interview controls
 - [ ] Add rate limits, request size limits, structured logs, and error states
 - [ ] Test permissions, offline mode, cold starts, and invalid DOM data
 
@@ -43,4 +43,3 @@
 - [ ] Recruit 10 testers; record completion rate, duration, errors, and feedback
 
 Release gate: a new tester can install, authenticate, start an interview on LeetCode, exchange messages, finish, and see feedback without developer help.
-

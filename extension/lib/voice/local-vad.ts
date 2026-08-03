@@ -5,6 +5,7 @@ export type VadCallbacks = {
   onSpeechStart?: () => void;
   onSpeechEnd?: (audio: Float32Array) => void;
   onVADMisfire?: () => void;
+  onAudioLevel?: (level: number) => void;
 };
 
 export class LocalVad {
@@ -48,7 +49,18 @@ export class LocalVad {
         negativeSpeechThreshold: 0.5,
         redemptionMs: 400,
         preSpeechPadMs: 160,
-        minSpeechMs: 130,
+        // All silence detection stays on-device. A segment must contain enough
+        // sustained speech before any paid network provider can be called.
+        minSpeechMs: 400,
+
+        onFrameProcessed: (_probabilities, frame) => {
+          let sum = 0;
+          for (let index = 0; index < frame.length; index += 1) {
+            sum += frame[index] * frame[index];
+          }
+          const rms = Math.sqrt(sum / Math.max(1, frame.length));
+          callbacks.onAudioLevel?.(Math.min(1, rms * 7));
+        },
 
         onSpeechStart: () => {
           callbacks.onSpeechStart?.();

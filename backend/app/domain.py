@@ -1,6 +1,6 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +25,14 @@ class Interview:
     status: str
     created_at: datetime
     screen_context: InterviewScreenContext
+    target_company: str | None = None
+    interview_type: str = "dsa"
+    level: str = "sde1"
+    turns: list[InterviewTurn] = field(default_factory=list)
+    completed_at: datetime | None = None
+    assessment: dict[str, Any] | None = None
+    phase: str = "clarification"
+    code_snapshots: list[CodeSnapshot] = field(default_factory=list)
 
     @property
     def problem_title(self) -> str:
@@ -60,6 +68,21 @@ class InterviewScreenContext:
     programming_language: str | None = None
     code: str | None = None
     visible_output: str | None = None
+
+
+@dataclass
+class InterviewTurn:
+    candidate_message: str
+    interviewer_message: str
+    created_at: datetime
+    code: str = ""
+
+
+@dataclass
+class CodeSnapshot:
+    code: str
+    programming_language: str
+    created_at: datetime
 
 
 class AuthProvider(ABC):
@@ -113,6 +136,25 @@ class InterviewRepository(ABC):
 
         return interview
 
+    @abstractmethod
+    async def add_turn(
+        self,
+        interview_id: str,
+        user_id: str,
+        candidate_message: str,
+        interviewer_message: str,
+    ) -> Interview | None:
+        ...
+
+    @abstractmethod
+    async def complete(
+        self,
+        interview_id: str,
+        user_id: str,
+        assessment: dict[str, Any],
+    ) -> Interview | None:
+        ...
+
 
 class AIProvider(ABC):
     @abstractmethod
@@ -139,6 +181,7 @@ class SpeechProvider(ABC):
     async def synthesize(
         self,
         text: str,
+        reference_id: str | None = None,
     ) -> SynthesizedSpeech:
         ...
 
