@@ -215,6 +215,8 @@ export async function updateInterviewContext(
     programming_language: string;
     code: string;
     visible_output: string;
+    problem_topics: string[];
+    interview_companies: string[];
   }>,
 ): Promise<void> {
   const response = await authenticatedFetch(`${API_URL}/interviews/${interviewId}/context`, {

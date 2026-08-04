@@ -29,6 +29,14 @@ class InterviewContextUpdate(BaseModel):
         default=None,
         max_length=20_000,
     )
+    problem_topics: list[str] | None = Field(
+        default=None,
+        max_length=30,
+    )
+    interview_companies: list[str] | None = Field(
+        default=None,
+        max_length=50,
+    )
 
 class UserOut(BaseModel):
     id: str

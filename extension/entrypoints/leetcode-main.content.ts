@@ -27,11 +27,10 @@ export default defineContentScript({
       const editors =
         monacoApi?.editor?.getEditors?.() ?? [];
 
-      if (editors.length > 0) {
-        return editors[0];
-      }
-
-      return null;
+      return editors.find((editor) => {
+        const node = editor?.getDomNode?.();
+        return node?.isConnected && node.getClientRects().length > 0;
+      }) ?? editors[0] ?? null;
     }
 
     function getCode(): string {
@@ -57,6 +56,10 @@ export default defineContentScript({
     }
 
     function getLanguage(): string {
+      const editor = findEditor();
+      const activeLanguage = editor?.getModel?.()?.getLanguageId?.();
+      if (activeLanguage) return activeLanguage;
+
       const models = (
         window as typeof window & {
           monaco?: {

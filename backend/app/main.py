@@ -400,10 +400,11 @@ async def submit_interview_audio(
             "content_type": content_type,
             "size_bytes": len(audio_bytes),
         },
+        flush=True,
     )
 
-    interview.phase = _advance_sde1_phase(interview, transcript)
-
+    turn_started_at = time.perf_counter()
+    transcription_started_at = time.perf_counter()
     try:
         transcript = await transcription_provider.transcribe(
             audio_bytes=audio_bytes,
@@ -421,7 +422,9 @@ async def submit_interview_audio(
         {
             "interview_id": interview_id,
             "transcript": transcript,
+            "elapsed_seconds": round(time.perf_counter() - transcription_started_at, 3),
         },
+        flush=True,
     )
 
     if not transcript:
@@ -433,6 +436,9 @@ async def submit_interview_audio(
             ),
         )
 
+    interview.phase = _advance_sde1_phase(interview, transcript)
+
+    ai_started_at = time.perf_counter()
     try:
         interviewer_message = await ai_provider.reply(
             interview=interview,
@@ -471,12 +477,15 @@ async def submit_interview_audio(
         {
             "interview_id": interview_id,
             "message": interviewer_message,
+            "elapsed_seconds": round(time.perf_counter() - ai_started_at, 3),
         },
+        flush=True,
     )
 
     interviewer_audio_base64: str | None = None
     interviewer_audio_content_type: str | None = None
 
+    speech_started_at = time.perf_counter()
     try:
         synthesized_speech = await speech_provider.synthesize(
             interviewer_message,
@@ -493,7 +502,9 @@ async def submit_interview_audio(
             {
                 "interview_id": interview_id,
                 "error": str(error),
+                "elapsed_seconds": round(time.perf_counter() - speech_started_at, 3),
             },
+            flush=True,
         )
 
     else:
@@ -515,7 +526,10 @@ async def submit_interview_audio(
                 "size_bytes": len(
                     synthesized_speech.data
                 ),
+                "elapsed_seconds": round(time.perf_counter() - speech_started_at, 3),
+                "turn_elapsed_seconds": round(time.perf_counter() - turn_started_at, 3),
             },
+            flush=True,
         )
 
     print(

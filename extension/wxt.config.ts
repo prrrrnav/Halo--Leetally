@@ -16,12 +16,14 @@ export default defineConfig({
       "http://localhost:8000/*",
       "https://*.supabase.co/*",
       "https://leetcode.com/*",
+      "https://www.leetcode.com/*",
       "https://neetcode.io/*",
       "https://takeuforward.org/*",
       "https://www.techinterviewhandbook.org/*",
       "https://namastedev.com/*",
       "https://www.codingninjas.com/*",
       "https://raw.githubusercontent.com/*",
+      "https://www.google.com/*",
     ],
 
     content_security_policy: {
@@ -37,6 +39,7 @@ export default defineConfig({
         ],
         matches: [
           "https://leetcode.com/*",
+          "https://www.leetcode.com/*",
         ],
       },
     ],

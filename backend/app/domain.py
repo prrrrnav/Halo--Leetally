@@ -68,6 +68,8 @@ class InterviewScreenContext:
     programming_language: str | None = None
     code: str | None = None
     visible_output: str | None = None
+    problem_topics: list[str] = field(default_factory=list)
+    interview_companies: list[str] = field(default_factory=list)
 
 
 @dataclass

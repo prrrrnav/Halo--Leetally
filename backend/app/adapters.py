@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -138,6 +139,8 @@ class InMemoryInterviewRepository(InterviewRepository):
             programming_language=data.get("programming_language"),
             code=data.get("code"),
             visible_output=data.get("visible_output"),
+            problem_topics=data.get("problem_topics", []),
+            interview_companies=data.get("interview_companies", []),
         )
 
         interview = Interview(
@@ -476,6 +479,21 @@ class FishAudioSpeechProvider(SpeechProvider):
             "model": self._model,
         }
 
+        print(
+            "Fish Audio synthesis request:",
+            {
+                "text": normalized_text,
+                "text_length": len(normalized_text),
+                "model": self._model,
+                "format": self._format,
+                "latency": self._latency,
+                "speed": self._speed,
+                "reference_id": selected_reference_id,
+            },
+            flush=True,
+        )
+        started_at = time.perf_counter()
+
         try:
             async with httpx.AsyncClient(
                 timeout=45.0,
@@ -487,9 +505,31 @@ class FishAudioSpeechProvider(SpeechProvider):
                 )
 
         except httpx.RequestError as error:
+            print(
+                "Fish Audio request error:",
+                {
+                    "type": type(error).__name__,
+                    "error": str(error),
+                    "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+                },
+                flush=True,
+            )
             raise SpeechServiceError(
                 "Fish Audio speech service is unavailable."
             ) from error
+
+        response_content_type = response.headers.get("content-type", "")
+        print(
+            "Fish Audio HTTP response:",
+            {
+                "status_code": response.status_code,
+                "content_type": response_content_type,
+                "size_bytes": len(response.content),
+                "request_id": response.headers.get("x-request-id"),
+                "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+            },
+            flush=True,
+        )
 
         if response.status_code != 200:
             raise SpeechServiceError(
@@ -501,6 +541,16 @@ class FishAudioSpeechProvider(SpeechProvider):
         if not response.content:
             raise SpeechServiceError(
                 "Fish Audio returned an empty audio response."
+            )
+
+        if not (
+            response_content_type.startswith("audio/")
+            or response_content_type.startswith("application/octet-stream")
+        ):
+            raise SpeechServiceError(
+                "Fish Audio returned a non-audio response: "
+                f"{response_content_type or 'unknown content type'}; "
+                f"{response.text[:500]}"
             )
 
         return SynthesizedSpeech(
@@ -648,7 +698,7 @@ class GroqAIProvider(AIProvider):
                 },
             ],
             "temperature": 0.4,
-            "max_tokens": 120,
+            "max_tokens": 80,
         }
 
         headers = {
@@ -750,6 +800,26 @@ class GroqAIProvider(AIProvider):
             keep_end=True,
         )
 
+        interview_companies = ", ".join(
+            clean_context_text(str(company), maximum_length=80)
+            for company in getattr(
+                interview.screen_context,
+                "interview_companies",
+                [],
+            )[:50]
+            if company
+        )
+
+        problem_topics = ", ".join(
+            clean_context_text(str(topic), maximum_length=80)
+            for topic in getattr(
+                interview.screen_context,
+                "problem_topics",
+                [],
+            )[:30]
+            if topic
+        )
+
         target_company = getattr(interview, "target_company", None)
         company_style = company_interview_style(target_company)
         interview_type = getattr(interview, "interview_type", "dsa")
@@ -807,7 +877,7 @@ Act as an interviewer, not as a tutor.
 Rules:
 - Respond directly to the candidate's latest statement.
 - Ask only one main question at a time.
-- Keep your response below 45 words.
+- Keep your response below 28 words and preferably one or two short sentences.
 - Do not repeat the candidate's answer.
 - Do not say "I heard".
 - Do not provide the complete solution.
@@ -830,9 +900,14 @@ Difficulty: {difficulty or "Unknown"}
 Language: {programming_language or "Unknown"}
 Target company: {target_company or "General"}
 Company simulation style: {company_style}
+Community-reported companies that recently used this problem: {interview_companies or "None known"}
+Use this interview-history signal only as background for realistic emphasis and follow-ups. Do not present it as verified private company data.
 
 Problem description:
 {problem_description or "Not available"}
+
+Problem topics:
+{problem_topics or "Not available"}
 
 Visible code:
 {code or "No code written yet"}

@@ -28,7 +28,7 @@ import type { TTSStatus } from "../../lib/tts/types.ts";
 import { LocalVad } from "../../lib/voice/local-vad.ts";
 import { float32ToPcm16 } from "../../lib/voice/pcm.ts";
 
-import type { LeetCodeContext } from "@/lib/leetcode-context.ts";
+import { readLeetCodeContext } from "@/lib/leetcode-context.ts";
 import {
   loadProgress,
   isTargetCompanyId,
@@ -43,6 +43,7 @@ import {
 } from "../../lib/progress.ts";
 import { syncLeetCodeProfile } from "../../lib/leetcode-profile.ts";
 import { updateSelectedSheetProgress } from "../../lib/sheet-progress.ts";
+import { findProblemCompanies, loadCompanyCatalog } from "../../lib/company-problems.ts";
 import {
   InterviewerMark,
   type InterviewerMarkMode,
@@ -71,80 +72,6 @@ type ConversationMessage = {
 };
 
 
-
-function readText(selectors: string[]): string {
-  for (const selector of selectors) {
-    const element = document.querySelector<HTMLElement>(selector);
-
-    const text = element?.innerText?.trim();
-
-    if (text) {
-      return text;
-    }
-  }
-
-  return "";
-}
-
-function readProblemTitle(): string {
-  return readText([
-    '[data-cy="question-title"]',
-    'a[href^="/problems/"][class*="text-title-large"]',
-    'div[class*="text-title-large"]',
-  ]);
-}
-
-function readProblemDescription(): string {
-  return readText([
-    '[data-track-load="description_content"]',
-    '[data-cy="question-content"]',
-    'div[class*="elfjS"]',
-  ]);
-}
-
-function readDifficulty(): string {
-  const possibleElements = Array.from(
-    document.querySelectorAll<HTMLElement>("div, span")
-  );
-
-  const difficultyElement = possibleElements.find((element) => {
-    const text = element.innerText?.trim();
-
-    return (
-      text === "Easy" ||
-      text === "Medium" ||
-      text === "Hard"
-    );
-  });
-
-  return difficultyElement?.innerText?.trim() ?? "";
-}
-
-function readProgrammingLanguage(): string {
-  return readText([
-    'button[id*="headlessui-listbox-button"]',
-    'button[class*="rounded"][class*="items-center"]',
-  ]);
-}
-
-function readVisibleOutput(): string {
-  return readText([
-    '[data-e2e-locator="console-result"]',
-    '[data-e2e-locator="console-test-result"]',
-    'div[class*="result"]',
-  ]);
-}
-
-function readLeetCodeContext(): LeetCodeContext {
-  return {
-    problemTitle: readProblemTitle(),
-    problemDescription: readProblemDescription(),
-    difficulty: readDifficulty(),
-    programmingLanguage: readProgrammingLanguage(),
-    code: "",
-    visibleOutput: readVisibleOutput(),
-  };
-}
 
 const adapter = new LeetCodeAdapter();
 
@@ -258,6 +185,9 @@ export default function App() {
   const fishAudioUrlRef =
     useRef<string | null>(null);
 
+  const fishAudioCancelRef =
+    useRef<(() => void) | null>(null);
+
   const userAudioLevelRef = useRef(0);
   const aiAudioLevelRef = useRef(0);
   const aiMeterFrameRef = useRef<number | null>(null);
@@ -267,8 +197,9 @@ export default function App() {
   const conversationMessagesRef = useRef<HTMLDivElement | null>(null);
   const targetCompanyRef = useRef<TargetCompanyId>("google");
   const interviewTypeRef = useRef<InterviewType>("dsa");
+  const startInterviewRef = useRef<() => Promise<void>>(async () => undefined);
 
-  const CODE_IDLE_DELAY_MS = 10_000;
+  const CODE_IDLE_DELAY_MS = 1_000;
 
   const latestCodeRef = useRef("");
   const latestLanguageRef = useRef("");
@@ -318,11 +249,18 @@ export default function App() {
 
           const activeInterviewId = interviewIdRef.current;
           if (activeInterviewId && runningRef.current) {
-            const pageContext = readLeetCodeContext();
+            const pageContext = readLeetCodeContext(
+              latestCodeRef.current,
+              latestLanguageRef.current,
+            );
             void updateInterviewContext(activeInterviewId, {
-              code: latestCodeRef.current,
-              programming_language: latestLanguageRef.current || pageContext.programmingLanguage,
+              problem_title: pageContext.problemTitle,
+              problem_description: pageContext.problemDescription,
+              difficulty: pageContext.difficulty,
+              programming_language: pageContext.programmingLanguage,
+              code: pageContext.code,
               visible_output: pageContext.visibleOutput,
+              problem_topics: pageContext.problemTopics,
             }).catch((cause) => console.debug("[LeetAlly] Evidence sync failed", cause));
           }
 
@@ -479,6 +417,14 @@ export default function App() {
   }, [status]);
 
   useEffect(() => {
+    function startCompanyMock(): void {
+      void startInterviewRef.current();
+    }
+    window.addEventListener("leetally:start-company-mock", startCompanyMock);
+    return () => window.removeEventListener("leetally:start-company-mock", startCompanyMock);
+  }, []);
+
+  useEffect(() => {
     if (status !== "running") return;
     if (seconds === 40 * 60) {
       setConversationMessages((current) => [...current, {
@@ -525,19 +471,21 @@ export default function App() {
     vadInitializationRef.current =
       vad.initialize({
         onSpeechStart: () => {
-          if (disposed || !runningRef.current) {
+          if (
+            disposed ||
+            !runningRef.current ||
+            processingRef.current
+          ) {
             return;
           }
 
-          // Always stop audio immediately when user starts speaking.
-          // Do NOT gate this on processingRef — that blocks interruptions.
+          // Ignore VAD while processing or speaking. Otherwise speaker output
+          // can cancel the interviewer voice before it becomes audible.
           stopFishAudio();
           setTTSStatus("cancelled");
 
-          if (!processingRef.current) {
-            setCandidateStatus("speaking");
-            setConversationOpen(true);
-          }
+          setCandidateStatus("speaking");
+          setConversationOpen(true);
         },
 
         onSpeechEnd: (audio) => {
@@ -649,6 +597,8 @@ export default function App() {
     stopAILevelMeter();
 
     const audio = fishAudioRef.current;
+    const cancelPlayback = fishAudioCancelRef.current;
+    fishAudioCancelRef.current = null;
 
     if (audio) {
       audio.pause();
@@ -663,6 +613,8 @@ export default function App() {
       URL.revokeObjectURL(audioUrl);
       fishAudioUrlRef.current = null;
     }
+
+    cancelPlayback?.();
   }
 
   function stopAILevelMeter(): void {
@@ -729,14 +681,18 @@ export default function App() {
 
     try {
       stopFishAudio();
-
-      console.log("[LeetAlly] Requesting Fish Audio via backend");
-
+      console.log("[LeetAlly] Requesting Fish Audio", {
+        text: normalizedText,
+        company: targetCompanyRef.current,
+      });
       const result = await synthesizeSpeech(
         normalizedText,
         targetCompanyRef.current,
       );
-
+      console.log("[LeetAlly] Fish Audio response", {
+        contentType: result.audio_content_type,
+        base64Length: result.audio_base64.length,
+      });
       await playBackendAudio(
         result.audio_base64,
         result.audio_content_type,
@@ -761,7 +717,7 @@ export default function App() {
   async function playBackendAudio(
     base64: string,
     contentType: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     stopFishAudio();
 
     console.log(
@@ -805,10 +761,19 @@ export default function App() {
 
     setTTSStatus("loading");
 
-    await new Promise<void>(
+    return new Promise<boolean>(
       (resolve, reject) => {
+        const cancelPlayback = () => {
+          setTTSStatus("cancelled");
+          resolve(false);
+        };
+        fishAudioCancelRef.current = cancelPlayback;
+
         function releaseAudio(): void {
           stopAILevelMeter();
+          if (fishAudioCancelRef.current === cancelPlayback) {
+            fishAudioCancelRef.current = null;
+          }
           if (
             fishAudioRef.current === audio
           ) {
@@ -830,7 +795,10 @@ export default function App() {
           );
 
           setTTSStatus("speaking");
-          void startAILevelMeter(audio);
+          // Keep Fish Audio on the native HTMLAudioElement output path.
+          // Routing it through a suspended AudioContext can make valid MP3
+          // playback silent in a content script.
+          aiAudioLevelRef.current = 0.35;
         };
 
         audio.onended = () => {
@@ -840,10 +808,17 @@ export default function App() {
 
           releaseAudio();
           setTTSStatus("idle");
-          resolve();
+          resolve(true);
         };
 
         audio.onerror = () => {
+          const mediaError = audio.error;
+          console.error("[LeetAlly] Fish Audio media error", {
+            code: mediaError?.code,
+            message: mediaError?.message,
+            contentType,
+            byteLength: bytes.byteLength,
+          });
           releaseAudio();
           setTTSStatus("error");
 
@@ -856,6 +831,7 @@ export default function App() {
 
         audio.play().catch(
           (cause: unknown) => {
+            console.error("[LeetAlly] Fish Audio play() rejected", cause);
             releaseAudio();
             setTTSStatus("error");
 
@@ -903,6 +879,20 @@ export default function App() {
       const pcmAudio = float32ToPcm16(audio);
       const wavBlob = pcm16ToWavBlob(pcmAudio);
 
+      const currentContext = readLeetCodeContext(
+        latestCodeRef.current,
+        latestLanguageRef.current,
+      );
+      await updateInterviewContext(activeInterviewId, {
+        problem_title: currentContext.problemTitle,
+        problem_description: currentContext.problemDescription,
+        difficulty: currentContext.difficulty,
+        programming_language: currentContext.programmingLanguage,
+        code: currentContext.code,
+        visible_output: currentContext.visibleOutput,
+        problem_topics: currentContext.problemTopics,
+      });
+
       const result = await submitInterviewAudio(
         activeInterviewId,
         wavBlob,
@@ -920,6 +910,8 @@ export default function App() {
 
       setLastTranscript(result.transcript);
       setInterviewPhase(result.phase);
+      console.log("[LeetAlly] Candidate transcript", result.transcript);
+      console.log("[LeetAlly] Groq interviewer response", result.interviewer_message);
       setConversationMessages((current) => [
         ...current,
         ...(result.transcript
@@ -938,16 +930,6 @@ export default function App() {
       setConversationOpen(true);
       setCandidateStatus("listening");
 
-      /*
-       * API call is done — clear processingRef NOW so the next VAD
-       * speech segment can be captured while audio is still playing.
-       */
-      processingRef.current = false;
-
-      /*
-       * Prefer Fish Audio from the backend (natural voice).
-       * Fall back to browser TTS only when no audio was returned.
-       */
       console.log("[LeetAlly] Interview response", {
         hasFishAudio: Boolean(
           result.interviewer_audio_base64
@@ -959,22 +941,21 @@ export default function App() {
       });
 
       if (
-        result.interviewer_audio_base64 &&
-        result.interviewer_audio_content_type
+        !result.interviewer_audio_base64 ||
+        !result.interviewer_audio_content_type
       ) {
-        await playBackendAudio(
-          result.interviewer_audio_base64,
-          result.interviewer_audio_content_type,
-        );
-      } else {
         throw new Error(
-          "The backend returned no Fish Audio. " +
-          "Check the FastAPI terminal for " +
-          "'Fish Audio synthesis failed'."
+          "Fish Audio returned no playable audio. Check the FastAPI terminal for the Fish synthesis log.",
         );
       }
 
-      if (runningRef.current) {
+      processingRef.current = false;
+      const playbackCompleted = await playBackendAudio(
+        result.interviewer_audio_base64,
+        result.interviewer_audio_content_type,
+      );
+
+      if (playbackCompleted && runningRef.current) {
         setCandidateStatus("listening");
       }
     } catch (cause) {
@@ -996,12 +977,7 @@ export default function App() {
     processCapturedSpeech;
 
   async function testVoice(): Promise<void> {
-    // Settings preview stays entirely on-device so it never creates a paid TTS
-    // request. Paid high-quality voice is reserved for actual interview turns.
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(
-      "Hello. I am your LeetAlly interviewer. Voice is ready.",
-    ));
+    await speak("Hello. I am your LeetAlly interviewer. Voice is ready.");
   }
 
   function stopVoice(): void {
@@ -1029,19 +1005,27 @@ export default function App() {
       targetCompanyRef.current = savedProgress.planner.targetCompany;
       interviewTypeRef.current = savedProgress.planner.interviewType ?? "dsa";
 
+      const adapterContext = adapter.getContext();
+      const pageContext = readLeetCodeContext(
+        latestCodeRef.current,
+        latestLanguageRef.current,
+      );
       const context = {
-        ...adapter.getContext(),
-        ...readLeetCodeContext(),
-        code: latestCodeRef.current,
-        programmingLanguage:
-          latestLanguageRef.current ||
-          readProgrammingLanguage(),
+        ...adapterContext,
+        ...pageContext,
+        problemTitle: pageContext.problemTitle || adapterContext.problemTitle,
+        difficulty: pageContext.difficulty || adapterContext.difficulty,
         targetCompany: targetCompanyRef.current,
         interviewType: interviewTypeRef.current,
       };
       if (!context.problemTitle?.trim() || !context.problemSlug?.trim()) {
         throw new Error("Open a supported LeetCode problem page before starting an interview.");
       }
+      const companyCatalog = await loadCompanyCatalog();
+      const interviewCompanies = findProblemCompanies(
+        companyCatalog,
+        context.problemSlug,
+      ).map(({ company }) => company.name);
       const interview = await createInterview(context);
 
       if (interview.target_company !== targetCompanyRef.current) {
@@ -1052,6 +1036,28 @@ export default function App() {
       if (interview.interview_type !== interviewTypeRef.current) {
         throw new Error("The backend did not accept the selected interview type. Restart the FastAPI backend and try again.");
       }
+
+      await updateInterviewContext(interview.id, {
+        problem_title: context.problemTitle,
+        problem_description: context.problemDescription,
+        difficulty: context.difficulty ?? undefined,
+        programming_language: context.programmingLanguage,
+        code: context.code,
+        visible_output: context.visibleOutput,
+        problem_topics: context.problemTopics,
+        interview_companies: interviewCompanies,
+      });
+
+      console.log("[LeetAlly] Interview context extracted", {
+        slug: context.problemSlug,
+        title: context.problemTitle,
+        difficulty: context.difficulty,
+        language: context.programmingLanguage,
+        descriptionLength: context.problemDescription.length,
+        codeLength: context.code.length,
+        visibleOutputLength: context.visibleOutput.length,
+        topics: context.problemTopics,
+      });
 
       interviewIdRef.current = interview.id;
       runningRef.current = true;
@@ -1107,6 +1113,8 @@ export default function App() {
     }
   }
 
+  startInterviewRef.current = startInterview;
+
   async function chooseInterviewType(interviewType: InterviewType): Promise<void> {
     if (runningRef.current) {
       setError("End the current interview before changing its type.");
@@ -1122,13 +1130,21 @@ export default function App() {
   async function endInterview(): Promise<void> {
     const activeInterviewId = interviewIdRef.current;
     const currentContext = adapter.getContext();
+    const currentPageContext = readLeetCodeContext(
+      latestCodeRef.current,
+      latestLanguageRef.current,
+    );
     let assessment: InterviewAssessment | null = null;
     if (activeInterviewId) {
       try {
         await updateInterviewContext(activeInterviewId, {
-          code: latestCodeRef.current,
-          programming_language: latestLanguageRef.current || readProgrammingLanguage(),
-          visible_output: readVisibleOutput(),
+          problem_title: currentPageContext.problemTitle,
+          problem_description: currentPageContext.problemDescription,
+          difficulty: currentPageContext.difficulty,
+          programming_language: currentPageContext.programmingLanguage,
+          code: currentPageContext.code,
+          visible_output: currentPageContext.visibleOutput,
+          problem_topics: currentPageContext.problemTopics,
         });
         assessment = await completeInterview(activeInterviewId, seconds);
       } catch (cause) {
