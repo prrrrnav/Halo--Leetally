@@ -5,8 +5,9 @@ import {
   cancelRenewal, createCheckout, getBillingPlans, getEntitlement, openCashfreeCheckout,
   type BillingEntitlement, type BillingPlan,
 } from "./billing";
+import PrepWorkspace, { type PrepRoute } from "./PrepWorkspace";
 
-type Route = "/" | "/features" | "/pricing" | "/feedback" | "/contact" | "/login" | "/signup" | "/privacy" | "/terms";
+type Route = "/" | "/features" | "/pricing" | "/feedback" | "/contact" | "/login" | "/signup" | "/privacy" | "/terms" | PrepRoute;
 const routeTitles: Record<Route, string> = {
   "/": "LeetAlly — Interview like it matters",
   "/features": "Features — LeetAlly",
@@ -17,12 +18,16 @@ const routeTitles: Record<Route, string> = {
   "/signup": "Sign Up — LeetAlly",
   "/privacy": "Privacy — LeetAlly",
   "/terms": "Terms — LeetAlly",
+  "/preparation": "Preparation Dashboard — LeetAlly",
+  "/company-dsa": "Company-wise DSA — LeetAlly",
+  "/dsa-patterns": "20 DSA Patterns — LeetAlly",
+  "/sql-sheet": "SQL Sheet — LeetAlly",
 };
 const extensionUrl = (import.meta.env.VITE_EXTENSION_URL as string | undefined) || "/contact";
 const supportEmail = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) || "watershaper9.1@gmail.com";
 
 function useRoute() {
-  const normalize = () => (["/", "/features", "/pricing", "/feedback", "/contact", "/login", "/signup", "/privacy", "/terms"].includes(location.pathname) ? location.pathname : "/") as Route;
+  const normalize = () => (["/", "/features", "/pricing", "/feedback", "/contact", "/login", "/signup", "/privacy", "/terms", "/preparation", "/company-dsa", "/dsa-patterns", "/sql-sheet"].includes(location.pathname) ? location.pathname : "/") as Route;
   const [route, setRoute] = useState<Route>(normalize);
   useEffect(() => { const change = () => setRoute(normalize()); addEventListener("popstate", change); return () => removeEventListener("popstate", change); }, []);
   const go = (path: Route) => { history.pushState({}, "", path); setRoute(path); scrollTo({ top: 0, behavior: "smooth" }); };
@@ -39,7 +44,7 @@ function OrbitalHero({ go }: { go: (path: Route) => void }) {
       <div className="eyebrow"><i /> LEETCODE AI INTERVIEWER + COMPANY PREP</div>
       <h1>Solve the problem.<br /><em>Face the interview.</em></h1>
       <p>Open any LeetCode problem and practise it with one voice interviewer. Then drill company-focused question sets across DSA, LLD, HLD and behavioural rounds.</p>
-      <div className="hero-actions"><a className="primary" href={extensionUrl}>Start on LeetCode <span>↗</span></a><button onClick={() => go("/features")}>Explore company prep</button></div>
+      <div className="hero-actions"><a className="primary" href={extensionUrl}>Start on LeetCode <span>↗</span></a><button onClick={() => go("/preparation")}>Explore prep sheets</button></div>
       <div className="proof"><span><b>2,000+</b> LeetCoders</span><span><b>01</b> voice interviewer</span><span><b>04</b> interview tracks</span><span><b>02</b> focused prep modes</span></div>
     </div>
     <div className="cosmos" aria-label="LeetAlly system: LeetCode, Google, Meta, Amazon, Netflix, Atlassian and interview tracks orbit one AI voice interviewer">
@@ -63,7 +68,7 @@ const features = [
 ];
 
 function Home({ go }: { go: (path: Route) => void }) {
-  return <><OrbitalHero go={go} /><section className="marquee"><span>LEETCODE INTERVIEWS</span><i /> <span>COMPANY QUESTION SETS</span><i /> <span>ONE VOICE COACH</span><i /></section><section className="home-grid"><div><span className="kicker">TWO FOCUSED MODES</span><h2>Practise the problem. Prepare for the company.</h2></div><p>LeetAlly combines realistic interviews on the LeetCode problem in front of you with focused question sets for the companies you want to join.</p></section><section className="pillar-grid"><article><span>01 / PRIMARY</span><h3>LeetCode AI Interviewer</h3><p>One voice interviewer reads the active problem and your evolving code, asks follow-ups, challenges assumptions and scores the evidence from your round.</p><a href={extensionUrl}>Start an interview ↗</a></article><article><span>02 / PRIMARY</span><h3>Company-based Questions</h3><p>Choose your target, filter by difficulty and practise focused DSA questions with progress tracking before turning them into interview rounds.</p><button onClick={() => go("/features")}>Explore company prep ↗</button><small>Independent preparation sets. No company affiliation or endorsement.</small></article></section><section className="phase-strip">{["LeetCode", "Company sets", "DSA", "LLD", "HLD", "Behavioural"].map((item, index) => <div key={item}><b>0{index + 1}</b><span>{item}</span></div>)}</section><section className="cta"><span>ONE INTERVIEWER. YOUR WHOLE PREP LOOP.</span><h2>Go from solving company-focused questions to explaining them under real interview pressure.</h2><a href={extensionUrl}>Start on LeetCode <b>↗</b></a></section></>;
+  return <><OrbitalHero go={go} /><section className="marquee"><span>LEETCODE INTERVIEWS</span><i /> <span>COMPANY QUESTION SETS</span><i /> <span>ONE VOICE COACH</span><i /></section><section className="home-grid"><div><span className="kicker">TWO FOCUSED MODES</span><h2>Practise the problem. Prepare for the company.</h2></div><p>LeetAlly combines realistic interviews on the LeetCode problem in front of you with focused question sets for the companies you want to join.</p></section><section className="pillar-grid"><article><span>01 / PRIMARY</span><h3>LeetCode AI Interviewer</h3><p>One voice interviewer reads the active problem and your evolving code, asks follow-ups, challenges assumptions and scores the evidence from your round.</p><a href={extensionUrl}>Start an interview ↗</a></article><article><span>02 / PRIMARY</span><h3>Company-based Questions</h3><p>Choose your target, filter by difficulty and practise focused DSA questions with progress tracking before turning them into interview rounds.</p><button onClick={() => go("/preparation")}>Open prep sheets ↗</button><small>Independent preparation sets. No company affiliation or endorsement.</small></article></section><section className="phase-strip">{["LeetCode", "Company sets", "DSA", "LLD", "HLD", "Behavioural"].map((item, index) => <div key={item}><b>0{index + 1}</b><span>{item}</span></div>)}</section><section className="cta"><span>ONE INTERVIEWER. YOUR WHOLE PREP LOOP.</span><h2>Go from solving company-focused questions to explaining them under real interview pressure.</h2><a href={extensionUrl}>Start on LeetCode <b>↗</b></a></section></>;
 }
 
 function Features() { return <><PageIntro index="01" label="FEATURES" title="LeetCode interviews meet company-focused prep." copy="One voice interviewer connects DSA, LLD, HLD and behavioural preparation." /><section className="feature-grid">{features.map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}</section><section className="architecture"><div><span>CHOOSE</span><b>Company + question</b></div><i>→</i><div><span>INTERVIEW</span><b>Explain + build</b></div><i>→</i><div><span>IMPROVE</span><b>Evidence + next drill</b></div></section></>; }
@@ -235,7 +240,8 @@ export default function App() {
     addEventListener("scroll", onScroll, { passive: true });
     return () => { removeEventListener("scroll", onScroll); if (frame) cancelAnimationFrame(frame); };
   }, []);
-  const page = route === "/" ? <Home go={go} /> : route === "/features" ? <Features /> : route === "/pricing" ? <Pricing go={go} session={session} /> : route === "/feedback" ? <FormPage kind="feedback" /> : route === "/contact" ? <FormPage kind="contact" /> : route === "/login" ? <Login session={session} /> : route === "/signup" ? <Login session={session} initialMode="signup" /> : <Legal type={route === "/privacy" ? "privacy" : "terms"} />;
+  const isPrepRoute = (["/preparation", "/company-dsa", "/dsa-patterns", "/sql-sheet"] as Route[]).includes(route);
+  const page = isPrepRoute ? <PrepWorkspace route={route as PrepRoute} go={go} /> : route === "/" ? <Home go={go} /> : route === "/features" ? <Features /> : route === "/pricing" ? <Pricing go={go} session={session} /> : route === "/feedback" ? <FormPage kind="feedback" /> : route === "/contact" ? <FormPage kind="contact" /> : route === "/login" ? <Login session={session} /> : route === "/signup" ? <Login session={session} initialMode="signup" /> : <Legal type={route === "/privacy" ? "privacy" : "terms"} />;
   const authActions = <>{session ? <Link to="/login" go={go} className="nav-login">Account</Link> : <><Link to="/login" go={go} className="nav-login">Login</Link><Link to="/signup" go={go} className="nav-signup">Sign Up</Link></>}<a className="nav-install" href={extensionUrl}>Add Chrome extension <span>↗</span></a></>;
-  return <div className="site"><header className="nav"><Link to="/" go={go} className="logo header-logo"><b>LEETALLY</b></Link><button className="menu" aria-label="Toggle menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button><nav className={menu ? "open" : ""} onClick={() => setMenu(false)}><Link to="/features" go={go}>Features</Link><Link to="/pricing" go={go}>Pricing</Link><Link to="/feedback" go={go}>Feedback</Link><Link to="/contact" go={go}>Contact</Link><div className="mobile-nav-actions">{authActions}</div></nav><div className="nav-actions">{authActions}</div></header><main>{page}</main><footer><div className="footer-brand"><Link to="/" go={go} className="logo"><b>LEETALLY</b></Link><p>Built for honest preparation.<br />Not affiliated with LeetCode.</p></div><div className="footer-links"><Link to="/features" go={go}>Features</Link><Link to="/pricing" go={go}>Pricing</Link><Link to="/privacy" go={go}>Privacy</Link><Link to="/terms" go={go}>Terms</Link><a href={`mailto:${supportEmail}`}>Support</a></div><small>© 2026 LeetAlly</small></footer></div>;
+  return <div className={`site ${isPrepRoute ? "prep-site" : ""}`}><header className="nav"><Link to="/" go={go} className="logo header-logo"><b>LEETALLY</b></Link><button className="menu" aria-label="Toggle menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>☰</button><nav className={menu ? "open" : ""} onClick={() => setMenu(false)}><Link to="/preparation" go={go}>Prep Sheets</Link><Link to="/features" go={go}>Features</Link><Link to="/pricing" go={go}>Pricing</Link><Link to="/feedback" go={go}>Feedback</Link><Link to="/contact" go={go}>Contact</Link><div className="mobile-nav-actions">{authActions}</div></nav><div className="nav-actions">{authActions}</div></header><main>{page}</main>{!isPrepRoute && <footer><div className="footer-brand"><Link to="/" go={go} className="logo"><b>LEETALLY</b></Link><p>Built for honest preparation.<br />Not affiliated with LeetCode.</p></div><div className="footer-links"><Link to="/features" go={go}>Features</Link><Link to="/pricing" go={go}>Pricing</Link><Link to="/privacy" go={go}>Privacy</Link><Link to="/terms" go={go}>Terms</Link><a href={`mailto:${supportEmail}`}>Support</a></div><small>© 2026 LeetAlly</small></footer>}</div>;
 }
