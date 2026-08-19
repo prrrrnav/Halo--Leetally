@@ -7,6 +7,7 @@ from fastapi.security import (
 from .adapters import (
     AuthenticationServiceUnavailableError,
     InMemoryInterviewRepository,
+    SupabaseInterviewRepository,
     InvalidAccessTokenError,
     GroqAIProvider,
     OpenAIRealtimeVoiceProvider,
@@ -28,10 +29,16 @@ from .domain import (
     RealtimeVoiceProvider,
     SpeechProvider,
 )
+from .trial_access import (
+    InMemoryTrialAccessRepository,
+    SupabaseTrialAccessRepository,
+    TrialAccessRepository,
+)
 
 
 repository = InMemoryInterviewRepository()
 billing_repository = InMemoryBillingRepository()
+trial_access_repository = InMemoryTrialAccessRepository()
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -93,8 +100,30 @@ async def current_user(
         ) from error
 
 
-def get_repository() -> InterviewRepository:
+def get_repository(
+    settings: Settings = Depends(get_settings),
+) -> InterviewRepository:
+    if settings.supabase_service_role_key:
+        return SupabaseInterviewRepository(settings)
+    if settings.app_env.lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Persistent interview storage is not configured.",
+        )
     return repository
+
+
+def get_trial_access_repository(
+    settings: Settings = Depends(get_settings),
+) -> TrialAccessRepository:
+    if settings.supabase_service_role_key:
+        return SupabaseTrialAccessRepository(settings)
+    if settings.app_env.lower() == "production":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Persistent trial access is not configured.",
+        )
+    return trial_access_repository
 
 
 def get_billing_repository(

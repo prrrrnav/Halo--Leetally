@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     fish_audio_model: str = "s2.1-pro-free"
     fish_audio_reference_id: str | None = None
     fish_audio_format: str = "mp3"
-    fish_audio_latency: str = "balanced"
-    fish_audio_speed: float = 0.9
+    fish_audio_latency: str = "low"
+    fish_audio_speed: float = 1.1
 
     cors_origins: str = "http://localhost:5173"
 
@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     cashfree_webhook_tolerance_seconds: int = 300
     minimum_billable_speech_ms: int = 400
     minimum_speech_rms: float = 0.003
+    ai_interview_trial_limit: int = 1
 
     model_config = SettingsConfigDict(
         env_file=".env",

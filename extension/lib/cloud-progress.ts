@@ -77,7 +77,7 @@ export function startCloudProgressSync(): () => void {
       void supabase.auth.getSession().then(async ({ data }) => {
         if (!data.session) return;
         await uploadProgress(data.session.user.id, await loadProgress());
-      }).catch((cause) => console.debug("[LeetAlly] Cloud progress sync unavailable", cause));
+      }).catch(() => undefined);
     }, 600);
   };
   browser.storage.onChanged.addListener(onChanged);

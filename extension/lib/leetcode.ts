@@ -1,59 +1,28 @@
 import type { InterviewContext } from "./api";
+import {
+  problemSlugFromPath,
+  readDifficulty,
+  readProblemTitle,
+} from "./leetcode-context";
 
 export class LeetCodeAdapter {
   isSupportedPage(): boolean {
     return (
-      location.hostname === "leetcode.com" &&
+      (location.hostname === "leetcode.com" || location.hostname === "www.leetcode.com") &&
       location.pathname.startsWith("/problems/")
     );
   }
 
   getProblemSlug(): string {
-    const parts = location.pathname.split("/").filter(Boolean);
-    const index = parts.indexOf("problems");
-
-    return parts[index + 1] ?? "unknown-problem";
+    return problemSlugFromPath(location.pathname) || "unknown-problem";
   }
 
   getProblemTitle(): string {
-    const selectors = [
-      "[data-cy='question-title']",
-      "div.text-title-large",
-      "a[href^='/problems/']",
-    ];
-
-    for (const selector of selectors) {
-      const element = document.querySelector<HTMLElement>(selector);
-      const text = element?.innerText.trim();
-
-      if (text && text.length < 300) {
-        return text.replace(/^\d+\.\s*/, "");
-      }
-    }
-
-    return this.getProblemSlug()
-      .split("-")
-      .map(
-        (part) =>
-          part.charAt(0).toUpperCase() + part.slice(1),
-      )
-      .join(" ");
+    return readProblemTitle();
   }
 
   getDifficulty(): string | null {
-    const candidates = Array.from(
-      document.querySelectorAll<HTMLElement>("div, span"),
-    );
-
-    for (const element of candidates) {
-      const text = element.innerText.trim();
-
-      if (text === "Easy") return "easy";
-      if (text === "Medium") return "medium";
-      if (text === "Hard") return "hard";
-    }
-
-    return null;
+    return readDifficulty() || null;
   }
 
   getContext(): InterviewContext {

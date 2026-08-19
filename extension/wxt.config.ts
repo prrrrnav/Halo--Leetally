@@ -6,21 +6,22 @@ export default defineConfig({
   manifest: {
     name: "LeetAlly",
     description:
-      "Practice LeetCode with an AI interviewer.",
-    version: "0.1.0",
+      "Practice LeetCode with an AI interviewer and track interview preparation progress.",
+    version: "0.1.1",
+    homepage_url: "https://leetally-web.vercel.app/",
+    key: "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuTlgzS1tC36TPGJvzhIQEBwXIyuJgmWyTp8+LJOrmSfHvSXhgs8qJxdU19ChM2Hom7xkw8/Yph5MNKgt7c1D4gLk/HE1D5HTIVAw+xqYLSYBFs/l5FHTut5Q8ep189+y5R3NH18HmcY5h6UKY2/4DSjjzgI5RKDYmhs9Qh+VRCkwqNMqSuNF+awOEJt0M3ZZeMsy4tZA2rnrWZz2fc1KmJ+7qOteaO1ysUTbYoBTVJet+lg7NzHZs0DB2+9ReLzSA40y7N5gkLaWsCW0KK5tv0YfZH5TalywCzHsSYaXreZqthGvZD+4aSeWhuVrSU4eXyV9KP56oRX5ctnert1X5wIDAQAB",
 
-    permissions: ["storage", "activeTab", "identity"],
+    action: {
+      default_title: "Open LeetAlly",
+    },
+
+    permissions: ["storage", "identity"],
 
     host_permissions: [
-      "http://127.0.0.1:8000/*",
-      "http://localhost:8000/*",
-      "https://*.supabase.co/*",
+      "https://leetally-api.vercel.app/*",
+      "https://wfpiyxepzmocwuowiadw.supabase.co/*",
       "https://leetcode.com/*",
-      "https://neetcode.io/*",
-      "https://takeuforward.org/*",
-      "https://www.techinterviewhandbook.org/*",
-      "https://namastedev.com/*",
-      "https://www.codingninjas.com/*",
+      "https://www.leetcode.com/*",
       "https://raw.githubusercontent.com/*",
     ],
 
@@ -37,6 +38,7 @@ export default defineConfig({
         ],
         matches: [
           "https://leetcode.com/*",
+          "https://www.leetcode.com/*",
         ],
       },
     ],

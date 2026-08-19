@@ -103,6 +103,8 @@ html,body,#root{width:380px;min-width:380px;height:550px;min-height:550px}
 .popup{height:550px;padding:15px 14px 72px}
 .app-header{position:relative;justify-content:center;min-height:42px;margin:0 2px 14px;padding:0 44px 11px}
 .app-header .brand{min-width:0;text-align:center}
+.app-header .brand{display:flex;align-items:center;justify-content:center;gap:8px}
+.app-header .brand-logo{display:block;width:30px;height:30px;flex:0 0 auto;border-radius:8px;object-fit:contain;box-shadow:0 0 16px #4d8dff35}
 .brand h1{font-size:16px}
 .brand p{font-size:9px;white-space:nowrap}
 .app-header .profile-image,.app-header .sync-small{position:absolute;right:0;margin:0}
@@ -127,6 +129,29 @@ html,body,#root{width:380px;min-width:380px;height:550px;min-height:550px}
 nav{padding:7px 5px 9px}
 nav button{min-width:0;padding:3px 1px;font-size:7.5px}
 nav button span{margin-bottom:2px;font-size:15px}
+
+.auth-gate{display:flex;flex-direction:column;padding:22px;background:radial-gradient(circle at 82% 0,#173a6b 0,transparent 38%),#050706}
+.auth-gate-loading{display:grid;place-items:center;gap:14px;height:100%;color:#a8caff;font-size:12px}
+.auth-gate-loading img{width:58px;height:58px;border-radius:16px;box-shadow:0 0 34px #4d8dff55}
+.auth-gate-brand{display:flex;align-items:center;gap:11px;margin:4px 2px 24px}
+.auth-gate-brand img{width:42px;height:42px;border-radius:12px;box-shadow:0 0 24px #4d8dff45}
+.auth-gate-brand strong,.auth-gate-brand span{display:block}
+.auth-gate-brand strong{font-size:17px}
+.auth-gate-brand span{margin-top:2px;color:#8290a3;font-size:9px}
+.auth-gate-card{padding:23px;background:linear-gradient(145deg,#0b1422,#080c13);border:1px solid #2d4669;border-radius:22px;box-shadow:0 24px 65px #0009}
+.auth-gate-card h2{margin:7px 0 5px;font-size:23px;letter-spacing:-.7px}
+.auth-gate-card>p{margin:0 0 18px;color:#8e9caf;font-size:10px;line-height:1.5}
+.auth-gate-card .auth-input{display:block;width:100%;margin-top:8px;padding:11px;border-radius:10px}
+.website-auth,.auth-gate-card .google-auth,.auth-gate-card .email-auth{display:flex;align-items:center;justify-content:center;width:100%;min-height:40px;border-radius:999px;font-size:10px;font-weight:850;cursor:pointer}
+.website-auth{color:#061126;background:#a8caff;border:0}
+.auth-gate-card .google-auth{gap:9px;margin-top:8px;color:#eaf1ff;background:#101827;border:1px solid #31435f}
+.auth-gate-card .google-auth img{width:16px;height:16px}
+.auth-gate-card .email-auth{margin-top:10px}
+.auth-gate-card button:disabled{opacity:.5;cursor:default}
+.auth-gate-card .auth-divider{margin:15px 0 7px}
+.auth-gate-card .auth-links{margin-top:10px}
+.auth-gate-legal{display:block;margin-top:14px;color:#68778b;font-size:8px;line-height:1.45;text-align:center}
+.auth-gate-legal a{color:#a8caff}
 
 .interview-type-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin:2px 0 9px}
 .interview-type-tabs button{position:relative;min-width:0;padding:9px 2px;color:#77869b;background:#080d15;border:1px solid #202d40;border-radius:10px;font-size:8px;font-weight:800;cursor:pointer}

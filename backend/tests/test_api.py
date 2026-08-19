@@ -13,20 +13,48 @@ from app.billing import (
     InMemoryBillingRepository, cashfree_webhook_unix_seconds,
     parse_lifecycle_webhook, parse_successful_webhook, verify_cashfree_signature,
 )
-from app.dependencies import get_speech_provider
+from app.dependencies import (
+    get_ai_provider,
+    get_speech_provider,
+    get_transcription_provider,
+)
 from app.domain import SynthesizedSpeech
+from app.adapters import GroqAIProvider
 from app.main import _advance_sde1_phase, _inspect_pcm_wav, app
-from app.dependencies import repository
+from app.dependencies import repository, trial_access_repository
 from app.voice_profiles import COMPANY_VOICE_PROFILES, company_voice_reference
 
 client = TestClient(app)
 headers = {"Authorization": "Bearer test-user"}
 
+
+@pytest.fixture(autouse=True)
+def reset_in_memory_state():
+    repository.items.clear()
+    trial_access_repository.usage.clear()
+    yield
+    repository.items.clear()
+    trial_access_repository.usage.clear()
+
 def test_health():
     assert client.get("/api/v1/health").json()["status"] == "ok"
+    readiness = client.get("/api/v1/health/ready")
+    assert readiness.status_code == 503
+    assert readiness.json()["detail"]["status"] == "not_ready"
 
 def test_auth_required():
     assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_account_data_operations_require_server_configuration():
+    assert client.get("/api/v1/account/export", headers=headers).status_code == 503
+    response = client.request(
+        "DELETE",
+        "/api/v1/account",
+        headers=headers,
+        json={"confirmation": "DELETE"},
+    )
+    assert response.status_code == 503
 
 def test_create_and_read_interview():
     payload = {"platform":"leetcode","problem_slug":"two-sum","problem_title":"Two Sum","difficulty":"easy","target_company":"meta"}
@@ -38,6 +66,44 @@ def test_create_and_read_interview():
     assert fetched.status_code == 200
     assert fetched.json()["target_company"] == "meta"
     assert client.get(f"/api/v1/interviews/{interview_id}", headers={"Authorization":"Bearer another-user"}).status_code == 404
+
+
+def test_each_account_can_start_only_one_ai_interview():
+    payload = {"platform":"leetcode","problem_slug":"two-sum","problem_title":"Two Sum","difficulty":"easy"}
+    first = client.post("/api/v1/interviews", headers=headers, json=payload)
+    second = client.post("/api/v1/interviews", headers=headers, json=payload)
+    another_user = client.post(
+        "/api/v1/interviews",
+        headers={"Authorization": "Bearer another-user"},
+        json=payload,
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Your one free AI interview has already been used. More access is coming soon."
+    assert another_user.status_code == 201
+
+
+def test_company_interview_history_reaches_the_ai_prompt():
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    response = client.patch(
+        f"/api/v1/interviews/{created['id']}/context",
+        headers=headers,
+        json={
+            "interview_companies": ["Google", "Amazon", "Meta"],
+            "problem_topics": ["Array", "Hash Table"],
+        },
+    )
+    assert response.status_code == 200
+
+    provider = object.__new__(GroqAIProvider)
+    prompt = provider._build_system_prompt(repository.items[created["id"]])
+    assert "Community-reported companies that recently used this problem: Google, Amazon, Meta" in prompt
+    assert "Problem topics:\nArray, Hash Table" in prompt
+    assert "Do not present it as verified private company data" in prompt
 
 
 def test_complete_interview_returns_evidence_backed_sde1_scorecard():
@@ -213,6 +279,46 @@ def test_server_audio_gate_measures_duration_and_rejectable_silence():
     assert rms == 0
     _, speech_rms = _inspect_pcm_wav(_pcm_wav(0.75, 4000), "audio/wav")
     assert speech_rms > 0.1
+
+
+def test_audio_turn_transcribes_before_advancing_interview_phase():
+    class StubTranscriptionProvider:
+        async def transcribe(self, audio_bytes, content_type):
+            return "Can I assume the input contains duplicates?"
+
+    class StubAIProvider:
+        async def reply(self, interview, candidate_message):
+            assert interview.phase == "approach"
+            return "Yes. Now explain your approach."
+
+    class StubSpeechProvider:
+        async def synthesize(self, text, reference_id=None):
+            return SynthesizedSpeech(data=b"voice", content_type="audio/mpeg")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_transcription_provider] = StubTranscriptionProvider
+    app.dependency_overrides[get_ai_provider] = StubAIProvider
+    app.dependency_overrides[get_speech_provider] = StubSpeechProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio",
+            headers=headers,
+            files={"audio": ("candidate.wav", _pcm_wav(0.75, 4000), "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_transcription_provider, None)
+        app.dependency_overrides.pop(get_ai_provider, None)
+        app.dependency_overrides.pop(get_speech_provider, None)
+
+    assert response.status_code == 200
+    assert response.json()["transcript"] == "Can I assume the input contains duplicates?"
+    assert response.json()["phase"] == "approach"
+    assert response.json()["interviewer_message"] == "Yes. Now explain your approach."
+    assert response.json()["interviewer_audio_content_type"] == "audio/mpeg"
+    assert base64.b64decode(response.json()["interviewer_audio_base64"]) == b"voice"
 
 
 def test_sde1_phases_advance_from_observable_evidence():

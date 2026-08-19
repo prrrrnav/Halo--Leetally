@@ -7,6 +7,184 @@ input {
   font: inherit;
 }
 
+.leetally-company-indicator {
+  position: fixed;
+  z-index: 2147483646;
+  width: 244px;
+  color: #f2f6ff;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+}
+.leetally-company-indicator::after {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  left: 0;
+  height: 9px;
+}
+.leetally-company-indicator.opens-down::after { top: 100%; bottom: auto; }
+
+.leetally-company-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 9px 32px 9px 11px;
+  background: linear-gradient(145deg, rgba(10, 17, 29, .97), rgba(5, 9, 16, .98));
+  border: 1px solid #2c4262;
+  border-radius: 15px;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, .52);
+  backdrop-filter: blur(14px);
+  cursor: grab;
+  touch-action: none;
+}
+.leetally-company-indicator.is-dragging .leetally-company-summary { cursor: grabbing; }
+.leetally-company-indicator.is-dragging .leetally-company-tooltip { visibility: hidden; opacity: 0; }
+
+.leetally-company-summary > span { min-width: 0; }
+.leetally-company-summary strong,
+.leetally-company-summary small { display: block; }
+.leetally-company-summary strong { font-size: 11px; line-height: 1.25; }
+.leetally-company-summary small { margin-top: 3px; color: #91a3bc; font-size: 8px; }
+.leetally-company-summary:focus-visible { border-color: #6f9bd7; outline: 2px solid #4d8dff55; outline-offset: 2px; }
+
+.leetally-company-icons { display: flex; align-items: center; min-width: 58px; }
+.leetally-company-icons.radar-empty { min-width: 36px; }
+.leetally-company-icons i,
+.leetally-company-icons b,
+.leetally-company-match-list i {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  color: #f8fbff;
+  background: color-mix(in srgb, var(--company-color) 72%, #111827);
+  border: 2px solid #0a111d;
+  border-radius: 50%;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: -.2px;
+}
+.leetally-company-icons i + i,
+.leetally-company-icons b { margin-left: -9px; }
+.leetally-company-icons b { color: #a8caff; background: #17243a; }
+.leetally-company-icons img,
+.leetally-company-match-list img { width: 68%; height: 68%; object-fit: contain; }
+.leetally-company-icons i > span,
+.leetally-company-match-list i > span { color: inherit; font: inherit; }
+.leetally-company-icons.radar-empty i {
+  width: 32px;
+  height: 32px;
+  color: #a8caff;
+  background: radial-gradient(circle, #214b83 0 12%, #0d1b30 14% 43%, #315b9226 45% 48%, #08111f 50%);
+  border-color: #426caa;
+  box-shadow: 0 0 18px #4d8dff3d;
+  font-size: 9px;
+}
+.leetally-company-icons .radar-scanning { animation: leetally-radar-pulse 1.3s ease-in-out infinite; }
+@keyframes leetally-radar-pulse { 50% { border-color: #9bc2ff; box-shadow: 0 0 25px #4d8dff75; transform: scale(1.05); } }
+
+.leetally-company-dismiss {
+  position: absolute;
+  z-index: 3;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: #7f91aa;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.leetally-company-dismiss:hover,
+.leetally-company-dismiss:focus-visible { color: white; background: #1a2940; outline: none; }
+
+.leetally-company-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 268px;
+  max-height: min(410px, calc(100vh - 150px));
+  overflow: auto;
+  padding: 14px;
+  visibility: hidden;
+  color: #f2f6ff;
+  background: linear-gradient(145deg, #0a111df7, #050910fc);
+  border: 1px solid #314b70;
+  border-radius: 16px;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .68);
+  opacity: 0;
+  transform: translateY(-5px);
+  transition: opacity 150ms ease, transform 150ms ease, visibility 150ms;
+  scrollbar-color: #34527d transparent;
+}
+.leetally-company-indicator.opens-down .leetally-company-tooltip { top: calc(100% + 8px); bottom: auto; }
+.leetally-company-indicator:hover .leetally-company-tooltip,
+.leetally-company-indicator:focus-within .leetally-company-tooltip,
+.leetally-company-indicator.is-open .leetally-company-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+.leetally-company-tooltip header span { color: #8fbaff; font-size: 8px; font-weight: 900; letter-spacing: 1.2px; }
+.leetally-company-tooltip header strong { display: block; margin-top: 4px; font-size: 12px; }
+.leetally-radar-score { display: flex; align-items: center; gap: 11px; margin-top: 12px; padding: 10px; background: #0d1725; border: 1px solid #203653; border-radius: 12px; }
+.leetally-radar-score > div { display: grid; place-items: center; align-content: center; width: 47px; height: 47px; flex: 0 0 auto; background: radial-gradient(circle,#0b1422 57%,transparent 59%),conic-gradient(#78a9f8 var(--radar-score),#24334a 0); border-radius: 50%; }
+.leetally-radar-score > div b { font-size: 14px; line-height: 1; }
+.leetally-radar-score > div small { color: #72849c; font-size: 7px; }
+.leetally-radar-score > span strong,
+.leetally-radar-score > span small { display: block; }
+.leetally-radar-score > span strong { font-size: 10px; }
+.leetally-radar-score > span small { margin-top: 3px; color: #8496ad; font-size: 8px; line-height: 1.35; }
+.leetally-radar-topics { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.leetally-radar-topics span { padding: 4px 6px; color: #a8caff; background: #101e32; border: 1px solid #263d5d; border-radius: 99px; font-size: 7px; }
+.leetally-company-match-list { display: grid; gap: 6px; margin-top: 11px; }
+.leetally-company-match-list > div { display: flex; align-items: center; gap: 9px; padding: 7px; background: #0d1725; border: 1px solid #1f3048; border-radius: 10px; }
+.leetally-company-match-list i { width: 28px; height: 28px; border: 0; }
+.leetally-company-match-list span { min-width: 0; }
+.leetally-company-match-list strong,
+.leetally-company-match-list small { display: block; }
+.leetally-company-match-list strong { font-size: 10px; }
+.leetally-company-match-list small { margin-top: 2px; color: #8496ad; font-size: 8px; }
+.leetally-radar-empty-state { margin-top: 12px; padding: 13px; background: radial-gradient(circle at 90% 10%,#274f8433,transparent 42%),#0b1421; border: 1px solid #243955; border-radius: 12px; }
+.leetally-radar-empty-state b { font-size: 10px; }
+.leetally-radar-empty-state p { margin: 6px 0 0; color: #8496ad; font-size: 8px; line-height: 1.5; }
+.leetally-radar-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 11px; }
+.leetally-radar-actions button,
+.leetally-radar-actions a { padding: 8px 7px; color: #b9c8dc; background: #101a29; border: 1px solid #293d59; border-radius: 9px; font-size: 8px; font-weight: 800; text-align: center; text-decoration: none; cursor: pointer; }
+.leetally-radar-actions button.primary { color: #07111f; background: #a8caff; border-color: #a8caff; }
+.leetally-radar-actions button:disabled { opacity: .55; cursor: wait; }
+.leetally-company-tooltip footer { margin-top: 10px; color: #687b94; font-size: 8px; text-align: center; }
+
+.leetally-radar-restore {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  color: #a8caff;
+  background: radial-gradient(circle,#214b83 0 10%,#0b1728 12% 43%,#315b9233 45% 48%,#07101c 50%);
+  border: 1px solid #426caa;
+  border-radius: 50%;
+  box-shadow: 0 10px 28px #0009,0 0 22px #4d8dff42;
+  cursor: pointer;
+}
+.leetally-radar-restore span { font-size: 9px; font-weight: 950; }
+.leetally-radar-restore:hover { border-color: #a8caff; transform: scale(1.06); }
+
+@media (max-width: 760px) {
+  .leetally-company-tooltip { width: 248px; }
+}
+
 .leetally-shell {
   position: fixed;
   z-index: 2147483647;
@@ -338,6 +516,21 @@ input {
   }
 }
 
+.leetally-panel-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.leetally-panel-brand img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  object-fit: contain;
+  box-shadow: 0 0 14px rgba(77, 141, 255, 0.25);
+}
+
 .leetally-google-login {
   margin-bottom: 10px;
   color: #18181b;
@@ -407,48 +600,80 @@ input {
 }
 
 .leetally-feedback {
-  position: absolute;
-  right: 0;
-  bottom: 128px;
-  width: 214px;
-  padding: 13px;
+  position: fixed;
+  right: 24px;
+  bottom: 118px;
+  width: min(380px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 150px));
+  overflow-y: auto;
+  padding: 20px;
   color: #f5f7f6;
   background: #171c1a;
   border: 1px solid #34433e;
-  border-radius: 13px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  border-radius: 24px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.62);
+  scrollbar-width: thin;
+  scrollbar-color: #34527d transparent;
 }
 
-.leetally-score-hero { display:flex; align-items:center; gap:10px; margin:8px 0; }
-.leetally-score-hero b { font-size:28px; color:#31e6c1; }
-.leetally-score-hero span { text-transform:capitalize; color:#c7d2da; }
-.leetally-score-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:10px 0; }
-.leetally-score-grid .leetally-score-dimension { display:grid; grid-template-columns:1fr auto; gap:4px 8px; padding:6px 8px; background:rgba(255,255,255,.06); border-radius:7px; text-transform:capitalize; }
-.leetally-score-dimension ul { grid-column:1 / -1; margin:2px 0 0; padding-left:14px; color:#9eabb5; font-size:9px; text-transform:none; }
+.leetally-score-hero { display:flex; align-items:center; gap:14px; margin:14px 0 12px; padding:14px 16px; background:rgba(87,134,202,.12); border:1px solid rgba(119,164,228,.24); border-radius:16px; }
+.leetally-score-hero b { flex:0 0 auto; font-size:34px; line-height:1; color:#31e6c1; letter-spacing:-1.5px; }
+.leetally-score-hero span { color:#c7d2da; font-size:11px; font-weight:750; line-height:1.4; text-transform:capitalize; }
+.leetally-score-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin:16px 0; }
+.leetally-score-grid .leetally-score-dimension { display:grid; grid-template-columns:minmax(0,1fr) auto; align-content:start; gap:7px 10px; min-height:92px; padding:12px; background:rgba(255,255,255,.06); border-radius:14px; text-transform:capitalize; }
+.leetally-score-grid .leetally-score-dimension:nth-last-child(1):nth-child(odd) { grid-column:1 / -1; min-height:auto; }
+.leetally-score-dimension > span { overflow-wrap:anywhere; font-size:11px; font-weight:750; }
+.leetally-score-dimension > b { font-size:15px; }
+.leetally-score-dimension ul { grid-column:1 / -1; margin:0; padding-left:16px; color:#aeb9c5; font-size:10px; line-height:1.45; text-transform:none; }
 .conversation-title { display:flex; flex:1; align-items:center; justify-content:space-between; gap:8px; }
 .conversation-title > span { padding:2px 6px; color:#101818; background:#31e6c1; border-radius:999px; font-size:8px; font-weight:800; text-transform:uppercase; }
 .leetally-data-disclosure { margin:8px 0;padding:8px;color:#b8c4ca;background:#121b1b;border:1px solid #344244;border-radius:8px;font-size:9px;line-height:1.4 }.leetally-data-disclosure strong{display:block;color:#fff}.leetally-data-disclosure p{margin:3px 0 0}.leetally-policy-consent{display:flex;align-items:flex-start;gap:6px;margin:6px 0 9px;color:#9eabb5;font-size:8px;line-height:1.4}.leetally-policy-consent input{margin-top:2px;accent-color:#31e6c1}.leetally-policy-consent a{color:#31e6c1}
-.leetally-feedback ol { margin:6px 0 0; padding-left:20px; }
-.leetally-feedback li { margin:4px 0; }
+.leetally-feedback > strong { display:block; margin-top:16px; font-size:12px; }
+.leetally-feedback ol { margin:8px 0 0; padding-left:20px; color:#c5cfda; font-size:10.5px; line-height:1.5; }
+.leetally-feedback li { margin:6px 0; }
 
 .leetally-feedback header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(168, 202, 255, 0.14);
 }
 
+.leetally-feedback header strong { font-size:14px; letter-spacing:-.2px; }
+
 .leetally-feedback header button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   color: #9eaaa6;
-  background: transparent;
-  border: 0;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 50%;
   cursor: pointer;
 }
 
 .leetally-feedback p {
-  margin: 9px 0 0;
+  margin: 12px 0 0;
   color: #b7c2be;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+@media (max-width: 520px) {
+  .leetally-feedback {
+    right: 12px;
+    bottom: 104px;
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 128px);
+    padding: 16px;
+    border-radius: 20px;
+  }
+
+  .leetally-score-grid { grid-template-columns: 1fr; }
+  .leetally-score-grid .leetally-score-dimension { grid-column: auto; min-height: auto; }
 }
 
 .leetally-conversation {
@@ -681,4 +906,4 @@ input {
 .dashboard-avatar{color:#061126;background:#a8caff}.dashboard-card header b{color:#a8caff}
 .activity-card header i,.activity-cell{background:#182235}.activity-card header i:nth-last-of-type(3),.activity-cell.level-1{background:#244a81}.activity-card header i:nth-last-of-type(2),.activity-cell.level-2{background:#356dc0}.activity-card header i:last-of-type,.activity-cell.level-3{background:#78a9f8}
 .sheet-controls button{color:#d7e5fa;background:#111c2c}.sheet-track{background:#1c293b}.daily-card button{color:#061126;background:#a8caff}
-.leetally-feedback{border-radius:18px}.leetally-conversation{border-radius:20px 20px 6px 20px}.leetally-dashboard{border-radius:20px;scrollbar-color:#34527d #090e17}
+.leetally-feedback{border-radius:24px}.leetally-conversation{border-radius:20px 20px 6px 20px}.leetally-dashboard{border-radius:20px;scrollbar-color:#34527d #090e17}

@@ -69,6 +69,8 @@ export const COMPANY_OPTIONS: CompanyOption[] = [
 export const FEATURED_COMPANIES = COMPANY_OPTIONS.filter((company) => company.group === "featured");
 
 const CACHE_KEY = "leetally-company-catalog-v4-snehasishroy-three-months-metrics";
+const REFRESHED_AT_KEY = `${CACHE_KEY}-refreshed-at`;
+const CATALOG_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SOURCE_REPOS = [
   {
     repo: "snehasishroy/leetcode-companywise-interview-questions",
@@ -188,4 +190,54 @@ export async function refreshCompanyCatalog(companyIds: CompanyId[] = FEATURED_C
   for (const result of results) if (result) updated[result.company] = result;
   await browser.storage.local.set({ [CACHE_KEY]: updated });
   return updated;
+}
+
+let catalogRefresh: Promise<Partial<Record<CompanyId, CompanyProblemList>>> | null = null;
+
+/**
+ * Loads the cached catalog immediately and refreshes the full company index at
+ * most once per day. The shared promise prevents multiple LeetCode tabs from
+ * starting duplicate refreshes in the same extension context.
+ */
+export async function ensureCompanyCatalog(): Promise<Partial<Record<CompanyId, CompanyProblemList>>> {
+  if (catalogRefresh) return catalogRefresh;
+
+  catalogRefresh = (async () => {
+    const stored = await browser.storage.local.get([CACHE_KEY, REFRESHED_AT_KEY]);
+    const cached = (stored[CACHE_KEY] as Partial<Record<CompanyId, CompanyProblemList>> | undefined) ?? {};
+    const refreshedAt = Number(stored[REFRESHED_AT_KEY] ?? 0);
+
+    if (Date.now() - refreshedAt < CATALOG_REFRESH_INTERVAL_MS) return cached;
+
+    const refreshed = await refreshCompanyCatalog(COMPANY_OPTIONS.map(({ id }) => id));
+    await browser.storage.local.set({ [REFRESHED_AT_KEY]: Date.now() });
+    return refreshed;
+  })().finally(() => {
+    catalogRefresh = null;
+  });
+
+  return catalogRefresh;
+}
+
+export interface ProblemCompanyMatch {
+  company: CompanyOption;
+  problem: CompanyProblem;
+}
+
+export function findProblemCompanies(
+  catalog: Partial<Record<CompanyId, CompanyProblemList>>,
+  slug: string,
+): ProblemCompanyMatch[] {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!normalizedSlug) return [];
+
+  return COMPANY_OPTIONS.flatMap((company) => {
+    const problem = catalog[company.id]?.questions.find(
+      (question) => question.slug.toLowerCase() === normalizedSlug,
+    );
+    return problem ? [{ company, problem }] : [];
+  }).sort((left, right) =>
+    (right.problem.frequency ?? -1) - (left.problem.frequency ?? -1)
+      || left.company.name.localeCompare(right.company.name),
+  );
 }

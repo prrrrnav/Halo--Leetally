@@ -32,11 +32,6 @@ async function calculateBundledProgress(
   }
 }
 
-function extractLeetCodeSlugs(html: string): string[] {
-  const matches = html.matchAll(/leetcode\.com\/problems\/([a-z0-9-]+)/gi);
-  return [...new Set([...matches].map((match) => match[1].toLowerCase()))];
-}
-
 async function fetchLeetCodeListSlugs(listId: string): Promise<string[]> {
   const response = await fetch("https://leetcode.com/graphql/", {
     method: "POST",
@@ -79,12 +74,16 @@ export async function updateSelectedSheetProgress(
     try {
       if (sheet.listId) {
         const listed = await fetchLeetCodeListSlugs(sheet.listId);
-        if (listed.length) slugs = listed;
-      }
-      const response = await fetch(sheet.url, { credentials: "omit" });
-      if (response.ok) {
-        const discovered = extractLeetCodeSlugs(await response.text());
-        if (discovered.length > slugs.length) slugs = discovered;
+        if (listed.length) {
+          slugs = listed;
+          return {
+            ...sheet,
+            problemSlugs: slugs,
+            total: slugs.length,
+            completed: slugs.filter((slug) => accepted.has(slug)).length,
+            autoTracked: true,
+          };
+        }
       }
     } catch {
       // Retain the last successfully discovered definition for offline use.

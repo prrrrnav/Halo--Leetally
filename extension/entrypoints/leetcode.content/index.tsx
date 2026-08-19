@@ -2,10 +2,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
+import { CompanyInterviewIndicator } from "./CompanyInterviewIndicator";
 import "./style.css";
 
 export default defineContentScript({
-  matches: ["https://leetcode.com/problems/*"],
+  matches: [
+    "*://leetcode.com/problems/*",
+    "*://www.leetcode.com/problems/*",
+  ],
   cssInjectionMode: "ui",
 
   async main(ctx) {
@@ -20,6 +24,7 @@ export default defineContentScript({
 
         root.render(
           <React.StrictMode>
+            <CompanyInterviewIndicator />
             <App />
           </React.StrictMode>,
         );

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -46,6 +47,10 @@ class AIServiceError(Exception):
 
 class SpeechServiceError(Exception):
     """Raised when speech synthesis fails."""
+
+
+class InterviewRepositoryError(RuntimeError):
+    """Raised when durable interview state cannot be read or written."""
 
 
 # =========================================================
@@ -138,6 +143,8 @@ class InMemoryInterviewRepository(InterviewRepository):
             programming_language=data.get("programming_language"),
             code=data.get("code"),
             visible_output=data.get("visible_output"),
+            problem_topics=data.get("problem_topics", []),
+            interview_companies=data.get("interview_companies", []),
         )
 
         interview = Interview(
@@ -162,11 +169,14 @@ class InMemoryInterviewRepository(InterviewRepository):
         user_id: str,
         candidate_message: str,
         interviewer_message: str,
+        phase: str | None = None,
     ) -> Interview | None:
         interview = await self.get(interview_id, user_id)
         if interview is None or interview.status == "completed":
             return None
         interview.status = "in_progress"
+        if phase:
+            interview.phase = phase
         interview.turns.append(InterviewTurn(
             candidate_message=candidate_message,
             interviewer_message=interviewer_message,
@@ -195,13 +205,8 @@ class InMemoryInterviewRepository(InterviewRepository):
         user_id: str,
     ) -> Interview | None:
         interview = self.items.get(interview_id)
-
-        if interview is None:
+        if interview is None or interview.user_id != user_id:
             return None
-
-        if interview.user_id != user_id:
-            return None
-
         return interview
 
     async def update_context(
@@ -209,15 +214,10 @@ class InMemoryInterviewRepository(InterviewRepository):
         interview_id: str,
         user_id: str,
         data: dict,
-    ):
-        interview = await self.get(
-            interview_id=interview_id,
-            user_id=user_id,
-        )
-
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
         if interview is None:
             return None
-
         next_code = data.get("code")
         if next_code is not None and next_code != (interview.code or ""):
             interview.code_snapshots.append(CodeSnapshot(
@@ -229,16 +229,294 @@ class InMemoryInterviewRepository(InterviewRepository):
                 ),
                 created_at=datetime.now(timezone.utc),
             ))
-
         for field_name, field_value in data.items():
             if field_value is not None:
-                setattr(
-                    interview.screen_context,
-                    field_name,
-                    field_value,
-                )
-
+                setattr(interview.screen_context, field_name, field_value)
         return interview
+
+
+class SupabaseInterviewRepository(InterviewRepository):
+    """Durable interview repository used by production function invocations."""
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.supabase_service_role_key:
+            raise InterviewRepositoryError(
+                "Persistent interview storage is not configured."
+            )
+        self.base_url = settings.supabase_url.rstrip("/") + "/rest/v1"
+        self.headers = {
+            "apikey": settings.supabase_service_role_key,
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+            "Content-Type": "application/json",
+        }
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        headers = {**self.headers, **kwargs.pop("headers", {})}
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.request(
+                    method,
+                    self.base_url + path,
+                    headers=headers,
+                    **kwargs,
+                )
+        except httpx.HTTPError as error:
+            raise InterviewRepositoryError(
+                "Interview storage is temporarily unavailable."
+            ) from error
+        if response.status_code >= 400:
+            raise InterviewRepositoryError(
+                "Interview storage operation failed."
+            )
+        return response
+
+    @staticmethod
+    def _datetime(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    @classmethod
+    def _from_rows(
+        cls,
+        row: dict[str, Any],
+        message_rows: list[dict[str, Any]],
+    ) -> Interview:
+        turns: list[InterviewTurn] = []
+        pending_candidate: dict[str, Any] | None = None
+        for message in message_rows:
+            if message.get("role") == "user":
+                pending_candidate = message
+            elif message.get("role") == "assistant" and pending_candidate:
+                turns.append(InterviewTurn(
+                    candidate_message=pending_candidate.get("content", ""),
+                    interviewer_message=message.get("content", ""),
+                    created_at=(
+                        cls._datetime(message.get("created_at"))
+                        or datetime.now(timezone.utc)
+                    ),
+                    code=pending_candidate.get("code", ""),
+                ))
+                pending_candidate = None
+
+        snapshots = [
+            CodeSnapshot(
+                code=item.get("code", ""),
+                programming_language=item.get("programming_language", "Unknown"),
+                created_at=(
+                    cls._datetime(item.get("created_at"))
+                    or datetime.now(timezone.utc)
+                ),
+            )
+            for item in (row.get("code_snapshots") or [])
+        ]
+        status = "in_progress" if row.get("status") == "active" else row.get("status", "created")
+        return Interview(
+            id=row["id"],
+            user_id=row["user_id"],
+            platform=row.get("platform", ""),
+            problem_slug=row.get("problem_slug", ""),
+            status=status,
+            created_at=(
+                cls._datetime(row.get("created_at"))
+                or datetime.now(timezone.utc)
+            ),
+            screen_context=InterviewScreenContext(
+                problem_title=row.get("problem_title", ""),
+                problem_description=row.get("problem_description", ""),
+                difficulty=row.get("difficulty"),
+                programming_language=row.get("programming_language"),
+                code=row.get("code"),
+                visible_output=row.get("visible_output"),
+                problem_topics=row.get("problem_topics") or [],
+                interview_companies=row.get("interview_companies") or [],
+            ),
+            target_company=row.get("target_company"),
+            interview_type=row.get("interview_type", "dsa"),
+            level=row.get("level", "sde1"),
+            turns=turns,
+            completed_at=cls._datetime(row.get("ended_at")),
+            assessment=row.get("assessment"),
+            phase=row.get("phase", "clarification"),
+            code_snapshots=snapshots,
+        )
+
+    async def create(
+        self,
+        user_id: str,
+        data: dict[str, Any],
+    ) -> Interview:
+        response = await self._request(
+            "POST",
+            "/interviews",
+            headers={"Prefer": "return=representation"},
+            json={
+                "user_id": user_id,
+                "platform": data.get("platform", ""),
+                "problem_slug": data.get("problem_slug", ""),
+                "problem_title": data.get("problem_title", ""),
+                "problem_description": data.get("problem_description", ""),
+                "difficulty": data.get("difficulty"),
+                "programming_language": data.get("programming_language"),
+                "code": data.get("code"),
+                "visible_output": data.get("visible_output"),
+                "problem_topics": data.get("problem_topics", []),
+                "interview_companies": data.get("interview_companies", []),
+                "target_company": data.get("target_company"),
+                "interview_type": data.get("interview_type", "dsa"),
+                "level": data.get("level", "sde1"),
+                "phase": "clarification",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            raise InterviewRepositoryError("Interview could not be created.")
+        return self._from_rows(rows[0], [])
+
+    async def get(
+        self,
+        interview_id: str,
+        user_id: str,
+    ) -> Interview | None:
+        response = await self._request(
+            "GET",
+            "/interviews",
+            params={
+                "id": f"eq.{interview_id}",
+                "user_id": f"eq.{user_id}",
+                "select": "*",
+                "limit": "1",
+            },
+        )
+        rows = response.json()
+        if not rows:
+            return None
+        messages = await self._request(
+            "GET",
+            "/interview_messages",
+            params={
+                "interview_id": f"eq.{interview_id}",
+                "select": "role,content,sequence_number,created_at,code",
+                "order": "sequence_number.asc",
+            },
+        )
+        return self._from_rows(rows[0], messages.json())
+
+    async def update_context(
+        self,
+        interview_id: str,
+        user_id: str,
+        data: dict,
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
+        if interview is None:
+            return None
+        snapshots = list(interview.code_snapshots)
+        next_code = data.get("code")
+        if next_code is not None and next_code != (interview.code or ""):
+            snapshots.append(CodeSnapshot(
+                code=next_code,
+                programming_language=(
+                    data.get("programming_language")
+                    or interview.programming_language
+                    or "Unknown"
+                ),
+                created_at=datetime.now(timezone.utc),
+            ))
+        allowed = {
+            "problem_title", "problem_description", "difficulty",
+            "programming_language", "code", "visible_output",
+            "problem_topics", "interview_companies",
+        }
+        payload = {key: value for key, value in data.items() if key in allowed and value is not None}
+        payload["code_snapshots"] = [
+            {
+                "code": item.code,
+                "programming_language": item.programming_language,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in snapshots
+        ]
+        await self._request(
+            "PATCH",
+            "/interviews",
+            params={"id": f"eq.{interview_id}", "user_id": f"eq.{user_id}"},
+            json=payload,
+        )
+        return await self.get(interview_id, user_id)
+
+    async def add_turn(
+        self,
+        interview_id: str,
+        user_id: str,
+        candidate_message: str,
+        interviewer_message: str,
+        phase: str | None = None,
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
+        if interview is None or interview.status == "completed":
+            return None
+        sequence = len(interview.turns) * 2
+        now = datetime.now(timezone.utc).isoformat()
+        await self._request(
+            "POST",
+            "/interview_messages",
+            json=[
+                {
+                    "interview_id": interview_id,
+                    "role": "user",
+                    "content": candidate_message,
+                    "sequence_number": sequence,
+                    "created_at": now,
+                    "code": interview.code or "",
+                },
+                {
+                    "interview_id": interview_id,
+                    "role": "assistant",
+                    "content": interviewer_message,
+                    "sequence_number": sequence + 1,
+                    "created_at": now,
+                },
+            ],
+        )
+        await self._request(
+            "PATCH",
+            "/interviews",
+            params={"id": f"eq.{interview_id}", "user_id": f"eq.{user_id}"},
+            json={
+                "status": "active",
+                "started_at": interview.created_at.isoformat(),
+                "phase": phase or interview.phase,
+            },
+        )
+        return await self.get(interview_id, user_id)
+
+    async def complete(
+        self,
+        interview_id: str,
+        user_id: str,
+        assessment: dict[str, Any],
+    ) -> Interview | None:
+        interview = await self.get(interview_id, user_id)
+        if interview is None:
+            return None
+        await self._request(
+            "PATCH",
+            "/interviews",
+            params={"id": f"eq.{interview_id}", "user_id": f"eq.{user_id}"},
+            json={
+                "status": "completed",
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+                "duration_seconds": assessment.get("duration_seconds"),
+                "assessment": assessment,
+            },
+        )
+        return await self.get(interview_id, user_id)
 
 # =========================================================
 # OPENAI REALTIME VOICE
@@ -476,6 +754,20 @@ class FishAudioSpeechProvider(SpeechProvider):
             "model": self._model,
         }
 
+        print(
+            "Fish Audio synthesis request:",
+            {
+                "text_length": len(normalized_text),
+                "model": self._model,
+                "format": self._format,
+                "latency": self._latency,
+                "speed": self._speed,
+                "custom_voice": bool(selected_reference_id),
+            },
+            flush=True,
+        )
+        started_at = time.perf_counter()
+
         try:
             async with httpx.AsyncClient(
                 timeout=45.0,
@@ -487,9 +779,31 @@ class FishAudioSpeechProvider(SpeechProvider):
                 )
 
         except httpx.RequestError as error:
+            print(
+                "Fish Audio request error:",
+                {
+                    "type": type(error).__name__,
+                    "error": str(error),
+                    "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+                },
+                flush=True,
+            )
             raise SpeechServiceError(
                 "Fish Audio speech service is unavailable."
             ) from error
+
+        response_content_type = response.headers.get("content-type", "")
+        print(
+            "Fish Audio HTTP response:",
+            {
+                "status_code": response.status_code,
+                "content_type": response_content_type,
+                "size_bytes": len(response.content),
+                "request_id": response.headers.get("x-request-id"),
+                "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+            },
+            flush=True,
+        )
 
         if response.status_code != 200:
             raise SpeechServiceError(
@@ -501,6 +815,16 @@ class FishAudioSpeechProvider(SpeechProvider):
         if not response.content:
             raise SpeechServiceError(
                 "Fish Audio returned an empty audio response."
+            )
+
+        if not (
+            response_content_type.startswith("audio/")
+            or response_content_type.startswith("application/octet-stream")
+        ):
+            raise SpeechServiceError(
+                "Fish Audio returned a non-audio response: "
+                f"{response_content_type or 'unknown content type'}; "
+                f"{response.text[:500]}"
             )
 
         return SynthesizedSpeech(
@@ -648,7 +972,7 @@ class GroqAIProvider(AIProvider):
                 },
             ],
             "temperature": 0.4,
-            "max_tokens": 120,
+            "max_tokens": 80,
         }
 
         headers = {
@@ -750,6 +1074,26 @@ class GroqAIProvider(AIProvider):
             keep_end=True,
         )
 
+        interview_companies = ", ".join(
+            clean_context_text(str(company), maximum_length=80)
+            for company in getattr(
+                interview.screen_context,
+                "interview_companies",
+                [],
+            )[:50]
+            if company
+        )
+
+        problem_topics = ", ".join(
+            clean_context_text(str(topic), maximum_length=80)
+            for topic in getattr(
+                interview.screen_context,
+                "problem_topics",
+                [],
+            )[:30]
+            if topic
+        )
+
         target_company = getattr(interview, "target_company", None)
         company_style = company_interview_style(target_company)
         interview_type = getattr(interview, "interview_type", "dsa")
@@ -807,7 +1151,7 @@ Act as an interviewer, not as a tutor.
 Rules:
 - Respond directly to the candidate's latest statement.
 - Ask only one main question at a time.
-- Keep your response below 45 words.
+- Keep your response below 28 words and preferably one or two short sentences.
 - Do not repeat the candidate's answer.
 - Do not say "I heard".
 - Do not provide the complete solution.
@@ -830,9 +1174,14 @@ Difficulty: {difficulty or "Unknown"}
 Language: {programming_language or "Unknown"}
 Target company: {target_company or "General"}
 Company simulation style: {company_style}
+Community-reported companies that recently used this problem: {interview_companies or "None known"}
+Use this interview-history signal only as background for realistic emphasis and follow-ups. Do not present it as verified private company data.
 
 Problem description:
 {problem_description or "Not available"}
+
+Problem topics:
+{problem_topics or "Not available"}
 
 Visible code:
 {code or "No code written yet"}
