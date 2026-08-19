@@ -38,6 +38,7 @@ from .billing import (
     parse_successful_webhook,
     verify_cashfree_signature,
 )
+from .account_data import AccountDataError, SupabaseAccountDataService
 from .dependencies import (
     current_user,
     get_ai_provider,
@@ -47,6 +48,7 @@ from .dependencies import (
     get_transcription_provider,
     get_billing_repository,
     get_cashfree_client,
+    get_trial_access_repository,
 )
 from .domain import (
     AuthenticatedUser,
@@ -56,6 +58,7 @@ from .domain import (
     SpeechProvider,
 )
 from .schemas import (
+    AccountDeleteIn,
     InterviewContextUpdate,
     InterviewCreate,
     InterviewOut,
@@ -72,6 +75,7 @@ from .schemas import (
     BillingPlanOut,
 )
 from .voice_profiles import company_voice_reference
+from .trial_access import TrialAccessError, TrialAccessRepository
 
 
 settings = get_settings()
@@ -89,12 +93,17 @@ app.add_middleware(
         "https://www.leetcode.com",
         *settings.cors_origin_list,
     ])),
-    allow_origin_regex=r"(chrome-extension|opera-extension)://.*|https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=(
+        None
+        if settings.app_env.lower() == "production"
+        else r"(chrome-extension|opera-extension)://.*|https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    ),
     allow_credentials=True,
     allow_methods=[
         "GET",
         "POST",
         "PATCH",
+        "DELETE",
         "OPTIONS",
     ],
     allow_headers=[
@@ -111,6 +120,38 @@ async def health() -> dict[str, str]:
         "status": "ok",
         "version": app.version,
     }
+
+
+@app.get("/api/v1/health/ready")
+async def readiness():
+    missing: list[str] = []
+    if settings.app_env.lower() != "production":
+        missing.append("APP_ENV=production")
+    for name, value in (
+        ("SUPABASE_SERVICE_ROLE_KEY", settings.supabase_service_role_key),
+        ("DEEPGRAM_API_KEY", settings.deepgram_api_key),
+        ("GROQ_API_KEY", settings.groq_api_key),
+        ("FISH_AUDIO_API_KEY", settings.fish_audio_api_key),
+    ):
+        if not value:
+            missing.append(name)
+    if not any(origin.startswith("chrome-extension://") for origin in settings.cors_origin_list):
+        missing.append("exact chrome-extension:// origin in CORS_ORIGINS")
+    if settings.billing_enabled:
+        for name, value in (
+            ("CASHFREE_CLIENT_ID", settings.cashfree_client_id),
+            ("CASHFREE_CLIENT_SECRET", settings.cashfree_client_secret),
+        ):
+            if not value:
+                missing.append(name)
+        if settings.cashfree_environment != "production":
+            missing.append("CASHFREE_ENVIRONMENT=production")
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "not_ready", "missing": missing},
+        )
+    return {"status": "ready", "version": app.version}
 
 
 @app.get("/api/v1/billing/plans", response_model=list[BillingPlanOut])
@@ -274,7 +315,23 @@ async def create_interview(
     payload: InterviewCreate,
     user: AuthenticatedUser = Depends(current_user),
     repository: InterviewRepository = Depends(get_repository),
+    trial_access: TrialAccessRepository = Depends(get_trial_access_repository),
 ):
+    try:
+        trial_available = await trial_access.claim(
+            user_id=user.id,
+            limit=settings.ai_interview_trial_limit,
+        )
+    except TrialAccessError as error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="We could not verify trial access. Please try again shortly.",
+        ) from error
+    if not trial_available:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Your one free AI interview has already been used. More access is coming soon.",
+        )
     return await repository.create(
         user_id=user.id,
         data=payload.model_dump(),
@@ -418,10 +475,10 @@ async def submit_interview_audio(
         ) from error
 
     print(
-        "Deepgram transcript:",
+        "Deepgram transcription complete:",
         {
             "interview_id": interview_id,
-            "transcript": transcript,
+            "transcript_length": len(transcript),
             "elapsed_seconds": round(time.perf_counter() - transcription_started_at, 3),
         },
         flush=True,
@@ -470,13 +527,14 @@ async def submit_interview_audio(
         user_id=user.id,
         candidate_message=transcript,
         interviewer_message=interviewer_message,
+        phase=interview.phase,
     )
 
     print(
-        "Groq interviewer response:",
+        "Groq interviewer response complete:",
         {
             "interview_id": interview_id,
-            "message": interviewer_message,
+            "message_length": len(interviewer_message),
             "elapsed_seconds": round(time.perf_counter() - ai_started_at, 3),
         },
         flush=True,
@@ -536,7 +594,6 @@ async def submit_interview_audio(
         "Interview context:",
         {
             "interview_id": interview.id,
-            "problem_title": interview.problem_title,
             "problem_description_length": len(
                 interview.problem_description or ""
             ),
@@ -546,8 +603,7 @@ async def submit_interview_audio(
             "code_length": len(
                 interview.code or ""
             ),
-            "visible_output":
-            interview.visible_output,
+            "visible_output_length": len(interview.visible_output or ""),
         },
     )
 
@@ -805,7 +861,6 @@ async def update_interview_context(
         "Interview context updated:",
         {
             "interview_id": interview_id,
-            "problem_title": payload.problem_title,
             "language": payload.programming_language,
             "code_length": (
                 len(payload.code)
@@ -816,3 +871,35 @@ async def update_interview_context(
     )
 
     return interview
+
+
+@app.get("/api/v1/account/export")
+async def export_account_data(
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        service = SupabaseAccountDataService(settings)
+        return await service.export(user.id, user.email)
+    except AccountDataError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.delete("/api/v1/account")
+async def delete_account(
+    payload: AccountDeleteIn,
+    user: AuthenticatedUser = Depends(current_user),
+    billing_repository: BillingRepository = Depends(get_billing_repository),
+):
+    del payload
+    entitlement = await billing_repository.get_entitlement(user.id)
+    if entitlement is not None and entitlement.auto_renew:
+        raise HTTPException(
+            status_code=409,
+            detail="Cancel automatic renewal before deleting the account.",
+        )
+    try:
+        service = SupabaseAccountDataService(settings)
+        await service.delete(user.id)
+    except AccountDataError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return {"deleted": True}

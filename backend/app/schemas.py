@@ -201,3 +201,5 @@ class BillingEntitlementOut(BaseModel):
     auto_renew: bool = False
     period_start: datetime | None = None
     period_end: datetime | None = None
+class AccountDeleteIn(BaseModel):
+    confirmation: str = Field(pattern=r"^DELETE$")

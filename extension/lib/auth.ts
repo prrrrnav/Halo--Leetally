@@ -1,7 +1,7 @@
 import { browser } from "wxt/browser";
 import { supabase } from "./supabase";
 
-export const POLICY_VERSION = "2026-08-03";
+export const POLICY_VERSION = "2026-08-17";
 
 export function googleOAuthRedirectUrl(): string {
   return browser.identity.getRedirectURL("auth/callback");
@@ -10,6 +10,13 @@ export function googleOAuthRedirectUrl(): string {
 export async function signInWithGoogle(): Promise<void> {
   const response = await browser.runtime.sendMessage({ type: "LEETALLY_GOOGLE_SIGN_IN" }) as { ok: boolean; error?: string } | undefined;
   if (!response?.ok) throw new Error(response?.error ?? "Google sign-in did not complete.");
+}
+
+export async function syncWebsiteSession(interactive = true): Promise<boolean> {
+  const response = await browser.runtime.sendMessage({ type: "LEETALLY_WEBSITE_SIGN_IN", interactive }) as { ok: boolean; error?: string } | undefined;
+  if (response?.ok) return true;
+  if (interactive) throw new Error(response?.error ?? "Website login did not complete.");
+  return false;
 }
 
 export async function signInWithEmail(email: string, password: string): Promise<void> {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { browser } from "wxt/browser";
 import type { Session } from "@supabase/supabase-js";
 import { getBillingEntitlement, type BillingEntitlement } from "../../lib/api";
-import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signUpWithEmail } from "../../lib/auth";
+import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signUpWithEmail, syncWebsiteSession } from "../../lib/auth";
 import { reconcileProgressWithCloud, startCloudProgressSync } from "../../lib/cloud-progress";
 import { COMPANY_OPTIONS, FEATURED_COMPANIES, loadCompanyCatalog, refreshCompanyCatalog, type CompanyGroup, type CompanyId, type CompanyProblem, type CompanyProblemList } from "../../lib/company-problems";
 import { fetchLeetCodeFriend, syncLeetCodeProfile } from "../../lib/leetcode-profile";
@@ -11,8 +11,9 @@ import { calculateStreak, DEFAULT_PROGRESS, INTERVIEW_COMPANIES, loadProgress, l
 import { supabase } from "../../lib/supabase";
 
 type View = "overview" | "interviews" | "planner" | "companies" | "friends" | "settings";
-const TERMS_URL = import.meta.env.VITE_TERMS_URL as string | undefined;
-const PRIVACY_URL = import.meta.env.VITE_PRIVACY_URL as string | undefined;
+const WEBSITE_URL = ((import.meta.env.VITE_WEBSITE_URL as string | undefined) || "https://leetally-web.vercel.app").replace(/\/$/, "");
+const TERMS_URL = (import.meta.env.VITE_TERMS_URL as string | undefined) || `${WEBSITE_URL}/terms`;
+const PRIVACY_URL = (import.meta.env.VITE_PRIVACY_URL as string | undefined) || `${WEBSITE_URL}/privacy`;
 const INTERVIEW_TYPES: Array<{ id: InterviewType; label: string; description: string }> = [
   { id: "dsa", label: "DSA", description: "Algorithms, coding, tests and complexity" },
   { id: "behavioral", label: "Behavioral", description: "STAR stories, ownership and teamwork" },
@@ -32,6 +33,7 @@ export default function App() {
   const [view, setView] = useState<View>("overview");
   const [authUserId, setAuthUserId] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
@@ -71,17 +73,22 @@ export default function App() {
       }
     };
     browser.storage.onChanged.addListener(changed);
-    void supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setAuthUserId(data.session?.user.id ?? null);
-      if (data.session) {
-        void reconcileProgressWithCloud(data.session.user.id).then(setProgress).catch(() => undefined);
+    void (async () => {
+      const initial = (await supabase.auth.getSession()).data.session;
+      if (!initial) await syncWebsiteSession(false).catch(() => false);
+      const current = (await supabase.auth.getSession()).data.session;
+      setSession(current);
+      setAuthUserId(current?.user.id ?? null);
+      setAuthChecked(true);
+      if (current) {
+        void reconcileProgressWithCloud(current.user.id).then(setProgress).catch(() => undefined);
         void getBillingEntitlement().then(setEntitlement).catch(() => setEntitlement(null));
       }
-    });
+    })();
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       setAuthUserId(nextSession?.user.id ?? null);
+      setAuthChecked(true);
       if (nextSession) {
         void reconcileProgressWithCloud(nextSession.user.id).then(setProgress).catch(() => undefined);
         void getBillingEntitlement().then(setEntitlement).catch(() => setEntitlement(null));
@@ -266,6 +273,16 @@ export default function App() {
     } finally { setAuthBusy(false); }
   }
 
+  async function authenticateFromWebsite() {
+    setAuthBusy(true); setAuthNotice("");
+    try {
+      await syncWebsiteSession(true);
+      setAuthNotice("Signed in. Loading your stats…");
+    } catch (cause) {
+      setAuthNotice(cause instanceof Error ? cause.message : "Website login failed.");
+    } finally { setAuthBusy(false); }
+  }
+
   async function resetPassword() {
     if (!authEmail.trim()) { setAuthNotice("Enter your email address first."); return; }
     setAuthBusy(true); setAuthNotice("");
@@ -280,9 +297,29 @@ export default function App() {
       || progress.solvedSlugs[problem.slug]);
   }
 
+  if (!authChecked) return <main className="popup auth-gate"><div className="auth-gate-loading"><img src="/icon/96.png" alt="" /><strong>Connecting LeetAlly…</strong></div></main>;
+
+  if (!session) return <main className="popup auth-gate">
+    <header className="auth-gate-brand"><img src="/icon/96.png" alt="" /><div><strong>LeetAlly</strong><span>Your interview preparation account</span></div></header>
+    <section className="auth-gate-card">
+      <span className="eyebrow">ACCOUNT REQUIRED</span>
+      <h2>Log in to see your stats.</h2>
+      <p>Your progress, interview history and plan appear after you connect your LeetAlly account.</p>
+      <button className="website-auth" disabled={authBusy} onClick={() => void authenticateFromWebsite()}>Continue from LeetAlly website</button>
+      <button className="google-auth gate-google" disabled={authBusy} onClick={() => void authenticateWithGoogle()}><img src="/google.svg" alt="" />Continue with Google</button>
+      <div className="auth-divider"><span>or use email</span></div>
+      <input className="auth-input" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email address" />
+      <input className="auth-input" type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (8+ characters)" onKeyDown={(event) => { if (event.key === "Enter") void authenticateWithEmail(); }} />
+      <button className="email-auth" disabled={authBusy || !authEmail.trim() || authPassword.length < 8} onClick={() => void authenticateWithEmail()}>{authBusy ? "Please wait…" : authMode === "signin" ? "Sign in with email" : "Create email account"}</button>
+      <div className="auth-links"><button onClick={() => { setAuthMode((mode) => mode === "signin" ? "signup" : "signin"); setAuthNotice(""); }}>{authMode === "signin" ? "Create account" : "Already have an account?"}</button>{authMode === "signin" && <button onClick={() => void resetPassword()}>Forgot password?</button>}</div>
+      <small className="auth-gate-legal">By continuing, you agree to the <a href={TERMS_URL} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy Policy</a>.</small>
+      {authNotice && <p className="notice">{authNotice}</p>}
+    </section>
+  </main>;
+
   return <main className="popup">
     <header className="app-header">
-      <div className="brand"><h1>LeetAlly</h1></div>
+      <div className="brand"><img className="brand-logo" src="/icon/48.png" alt="" width="30" height="30" /><h1>LeetAlly</h1></div>
       {profile?.avatar ? <img className="profile-image" src={profile.avatar} alt="" /> : <button className="sync-small" onClick={() => setView("settings")}>Connect</button>}
     </header>
 
@@ -405,12 +442,12 @@ export default function App() {
         {session ? <>
           <header><div><h3>LeetAlly account</h3><span>Progress and premium identity</span></div><i className={`account-status ${entitlement?.status === "active" ? "premium" : ""}`}>{entitlement?.status === "active" ? "Premium" : "Free"}</i></header>
           <div className="signed-account"><span>{(session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture) ? <img src={session.user.user_metadata.avatar_url || session.user.user_metadata.picture} alt="" /> : (session.user.email?.[0] ?? "L").toUpperCase()}</span><div><strong>{session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email}</strong><small>{session.user.email}</small></div></div>
-          <p className="cloud-note">Cloud progress sync is active. {entitlement?.status === "active" ? `${entitlement.minutes_remaining}/${entitlement.minutes_limit} speaking minutes remaining. Silence is never counted.` : "Premium purchases will attach to this account."}</p>
+          <p className="cloud-note">Cloud progress sync is active. {entitlement?.status === "active" ? `${entitlement.minutes_remaining}/${entitlement.minutes_limit} speaking minutes remaining. Silence is never counted.` : "Free launch access is active. Paid plans are currently unavailable."}</p>
           <button className="signout-button" onClick={() => void supabase.auth.signOut()}>Sign out</button>
         </> : <>
-          <header><div><h3>{authMode === "signin" ? "Sign in" : "Create account"}</h3><span>Keep progress and premium access across devices</span></div></header>
-          <div className="data-disclosure"><strong>Before you continue</strong><p>LeetAlly reads the current LeetCode problem, editor code and visible output. During an interview, detected speech segments—not silence—are sent to transcription and AI voice providers. This data is used only for interview practice, feedback, account sync and billing.</p></div>
-          <label className="policy-consent"><input type="checkbox" checked={policiesAccepted} onChange={(event) => setPoliciesAccepted(event.target.checked)} /><span>I agree to the {TERMS_URL ? <a href={TERMS_URL} target="_blank">Terms</a> : "Terms"} and acknowledge the {PRIVACY_URL ? <a href={PRIVACY_URL} target="_blank">Privacy Policy</a> : "Privacy Policy"} (version {POLICY_VERSION}).</span></label>
+          <header><div><h3>{authMode === "signin" ? "Sign in" : "Create account"}</h3><span>Keep progress and interview history across devices</span></div></header>
+          <div className="data-disclosure"><strong>Before you continue</strong><p>LeetAlly reads the current LeetCode problem, editor code and visible output. During an interview, detected speech segments—not silence—are sent to transcription and AI voice providers. This data is used only for interview practice, feedback and account sync.</p></div>
+          <label className="policy-consent"><input type="checkbox" checked={policiesAccepted} onChange={(event) => setPoliciesAccepted(event.target.checked)} /><span>I agree to the <a href={TERMS_URL} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy Policy</a> (version {POLICY_VERSION}).</span></label>
           <button className="google-auth" disabled={authBusy || !policiesAccepted} onClick={() => void authenticateWithGoogle()}><b>G</b>Continue with Google</button>
           <div className="auth-divider"><span>or use email</span></div>
           <input className="auth-input" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email address" />

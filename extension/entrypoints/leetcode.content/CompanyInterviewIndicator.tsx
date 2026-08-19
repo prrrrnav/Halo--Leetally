@@ -15,9 +15,11 @@ import {
   refreshCompanyCatalog,
   type ProblemCompanyMatch,
 } from "../../lib/company-problems.ts";
+import { POLICY_VERSION } from "../../lib/auth.ts";
 
 const DISMISSED_PROBLEMS_KEY = "leetally-dismissed-company-indicators-v1";
 const INDICATOR_POSITION_KEY = "leetally-company-indicator-position-v1";
+const POLICY_ACCEPTANCE_KEY = "leetally-policy-acceptance";
 const MAX_VISIBLE_ICONS = 4;
 const INDICATOR_WIDTH = 244;
 const INDICATOR_HEIGHT = 58;
@@ -30,21 +32,6 @@ interface Position {
   y: number;
 }
 
-const COMPANY_DOMAINS: Record<string, string> = {
-  google: "google.com", amazon: "amazon.com", meta: "meta.com",
-  netflix: "netflix.com", cisco: "cisco.com", microsoft: "microsoft.com",
-  apple: "apple.com", nvidia: "nvidia.com", adobe: "adobe.com",
-  salesforce: "salesforce.com", oracle: "oracle.com", uber: "uber.com",
-  airbnb: "airbnb.com", atlassian: "atlassian.com", bloomberg: "bloomberg.com",
-  bytedance: "bytedance.com", linkedin: "linkedin.com", paypal: "paypal.com",
-  "walmart-labs": "walmart.com", "goldman-sachs": "goldmansachs.com",
-  jpmorgan: "jpmorganchase.com", intel: "intel.com", accenture: "accenture.com",
-  tcs: "tcs.com", infosys: "infosys.com", wipro: "wipro.com",
-  cognizant: "cognizant.com", capgemini: "capgemini.com", hcl: "hcltech.com",
-  "tech-mahindra": "techmahindra.com", lti: "ltimindtree.com",
-  deloitte: "deloitte.com", ibm: "ibm.com",
-};
-
 function currentProblemSlug(): string {
   return location.pathname.match(/^\/problems\/([^/]+)/)?.[1]?.toLowerCase() ?? "";
 }
@@ -54,13 +41,6 @@ function companyInitials(name: string): string {
   return (words.length > 1
     ? words.map((word) => word[0]).join("")
     : name.slice(0, 2)).toUpperCase();
-}
-
-function companyLogoUrl(companyId: string): string {
-  const domain = COMPANY_DOMAINS[companyId];
-  return domain
-    ? `https://www.google.com/s2/favicons?domain_url=https://${domain}&sz=64`
-    : "";
 }
 
 function defaultPosition(): Position {
@@ -83,20 +63,8 @@ function clampPosition(position: Position): Position {
   };
 }
 
-function CompanyLogo({ id, name }: { id: string; name: string }) {
-  const [failed, setFailed] = useState(false);
-  const logoUrl = companyLogoUrl(id);
-
-  return failed || !logoUrl ? (
-    <span>{companyInitials(name)}</span>
-  ) : (
-    <img
-      src={logoUrl}
-      alt=""
-      draggable={false}
-      onError={() => setFailed(true)}
-    />
-  );
+function CompanyLogo({ name }: { id: string; name: string }) {
+  return <span>{companyInitials(name)}</span>;
 }
 
 async function dismissedProblems(): Promise<string[]> {
@@ -105,7 +73,8 @@ async function dismissedProblems(): Promise<string[]> {
 }
 
 export function CompanyInterviewIndicator() {
-  const [slug, setSlug] = useState(currentProblemSlug);
+  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [slug, setSlug] = useState("");
   const [matches, setMatches] = useState<ProblemCompanyMatch[]>([]);
   const [dismissed, setDismissed] = useState(false);
   const [status, setStatus] = useState<RadarStatus>("loading");
@@ -116,6 +85,23 @@ export function CompanyInterviewIndicator() {
   const dragOrigin = useRef<Position>({ x: 0, y: 0 });
   const dragMoved = useRef(false);
   const activePointer = useRef<number | null>(null);
+
+  useEffect(() => {
+    const refresh = () => {
+      void browser.storage.local.get(POLICY_ACCEPTANCE_KEY).then((stored) => {
+        setPolicyAccepted(stored[POLICY_ACCEPTANCE_KEY] === POLICY_VERSION);
+      });
+    };
+    const changed = (
+      changes: Record<string, Browser.storage.StorageChange>,
+      areaName: string,
+    ) => {
+      if (areaName === "local" && changes[POLICY_ACCEPTANCE_KEY]) refresh();
+    };
+    refresh();
+    browser.storage.onChanged.addListener(changed);
+    return () => browser.storage.onChanged.removeListener(changed);
+  }, []);
 
   useEffect(() => {
     void browser.storage.local.get(INDICATOR_POSITION_KEY).then((stored) => {
@@ -131,14 +117,20 @@ export function CompanyInterviewIndicator() {
   }, []);
 
   useEffect(() => {
+    if (!policyAccepted) {
+      setSlug("");
+      return;
+    }
+    setSlug(currentProblemSlug());
     const timer = window.setInterval(() => {
       const nextSlug = currentProblemSlug();
       setSlug((current) => nextSlug === current ? current : nextSlug);
     }, 750);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [policyAccepted]);
 
   useEffect(() => {
+    if (!policyAccepted) return;
     let active = true;
     setMatches([]);
     setStatus("loading");
@@ -161,13 +153,12 @@ export function CompanyInterviewIndicator() {
       if (!active) return;
       setMatches(findProblemCompanies(refreshed, slug));
       setStatus("ready");
-    })().catch((cause) => {
-      console.debug("[LeetAlly] Interview Radar unavailable", cause);
+    })().catch(() => {
       if (active) setStatus("error");
     });
 
     return () => { active = false; };
-  }, [slug]);
+  }, [policyAccepted, slug]);
 
   const accessibleCompanyList = matches.map(({ company }) => company.name).join(", ");
   const maxFrequency = Math.max(0, ...matches.map(({ problem }) => problem.frequency ?? 0));
@@ -197,8 +188,7 @@ export function CompanyInterviewIndicator() {
       const catalog = await refreshCompanyCatalog(COMPANY_OPTIONS.map(({ id }) => id));
       setMatches(findProblemCompanies(catalog, slug));
       setStatus("ready");
-    } catch (cause) {
-      console.debug("[LeetAlly] Interview Radar refresh failed", cause);
+    } catch {
       setStatus("error");
     }
   }
@@ -249,7 +239,7 @@ export function CompanyInterviewIndicator() {
     setExpanded(false);
   }
 
-  if (!slug) return null;
+  if (!policyAccepted || !slug) return null;
 
   const opensDown = position.y < window.innerHeight / 2;
 

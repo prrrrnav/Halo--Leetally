@@ -21,17 +21,40 @@ from app.dependencies import (
 from app.domain import SynthesizedSpeech
 from app.adapters import GroqAIProvider
 from app.main import _advance_sde1_phase, _inspect_pcm_wav, app
-from app.dependencies import repository
+from app.dependencies import repository, trial_access_repository
 from app.voice_profiles import COMPANY_VOICE_PROFILES, company_voice_reference
 
 client = TestClient(app)
 headers = {"Authorization": "Bearer test-user"}
 
+
+@pytest.fixture(autouse=True)
+def reset_in_memory_state():
+    repository.items.clear()
+    trial_access_repository.usage.clear()
+    yield
+    repository.items.clear()
+    trial_access_repository.usage.clear()
+
 def test_health():
     assert client.get("/api/v1/health").json()["status"] == "ok"
+    readiness = client.get("/api/v1/health/ready")
+    assert readiness.status_code == 503
+    assert readiness.json()["detail"]["status"] == "not_ready"
 
 def test_auth_required():
     assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_account_data_operations_require_server_configuration():
+    assert client.get("/api/v1/account/export", headers=headers).status_code == 503
+    response = client.request(
+        "DELETE",
+        "/api/v1/account",
+        headers=headers,
+        json={"confirmation": "DELETE"},
+    )
+    assert response.status_code == 503
 
 def test_create_and_read_interview():
     payload = {"platform":"leetcode","problem_slug":"two-sum","problem_title":"Two Sum","difficulty":"easy","target_company":"meta"}
@@ -43,6 +66,22 @@ def test_create_and_read_interview():
     assert fetched.status_code == 200
     assert fetched.json()["target_company"] == "meta"
     assert client.get(f"/api/v1/interviews/{interview_id}", headers={"Authorization":"Bearer another-user"}).status_code == 404
+
+
+def test_each_account_can_start_only_one_ai_interview():
+    payload = {"platform":"leetcode","problem_slug":"two-sum","problem_title":"Two Sum","difficulty":"easy"}
+    first = client.post("/api/v1/interviews", headers=headers, json=payload)
+    second = client.post("/api/v1/interviews", headers=headers, json=payload)
+    another_user = client.post(
+        "/api/v1/interviews",
+        headers={"Authorization": "Bearer another-user"},
+        json=payload,
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json()["detail"] == "Your one free AI interview has already been used. More access is coming soon."
+    assert another_user.status_code == 201
 
 
 def test_company_interview_history_reaches_the_ai_prompt():

@@ -145,6 +145,7 @@ class InterviewRepository(ABC):
         user_id: str,
         candidate_message: str,
         interviewer_message: str,
+        phase: str | None = None,
     ) -> Interview | None:
         ...
 

@@ -1,4 +1,4 @@
-const apiUrl = ((import.meta.env.VITE_API_URL as string | undefined) || "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
+const apiUrl = ((import.meta.env.VITE_API_URL as string | undefined) || "https://leetally-api.vercel.app/api/v1").replace(/\/$/, "");
 
 export type BillingPlan = {
   id: "sde1_sprint" | "sde1_intensive";
@@ -56,6 +56,12 @@ export const createCheckout = (
 ) => request<BillingCheckout>("/billing/checkout", { method: "POST", body: JSON.stringify(body) }, token);
 export const cancelRenewal = (token: string) => request<{ cancelled: boolean; access_until: string }>(
   "/billing/cancel", { method: "POST" }, token,
+);
+export const exportAccountData = (token: string) => request<Record<string, unknown>>(
+  "/account/export", undefined, token,
+);
+export const deleteAccount = (token: string) => request<{ deleted: boolean }>(
+  "/account", { method: "DELETE", body: JSON.stringify({ confirmation: "DELETE" }) }, token,
 );
 
 type CashfreeResult = Promise<{ error?: { message?: string } }>;

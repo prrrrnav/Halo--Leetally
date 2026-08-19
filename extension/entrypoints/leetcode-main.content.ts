@@ -8,9 +8,11 @@ export default defineContentScript({
 
   main() {
     const EVENT_NAME = "leetally:editor-context";
+    const CONTROL_EVENT_NAME = "leetally:editor-control";
 
     let previousCode = "";
     let previousLanguage = "";
+    let intervalId: number | null = null;
 
     function findEditor(): any | null {
       const monacoApi = (
@@ -100,11 +102,22 @@ export default defineContentScript({
       );
     }
 
-    window.setInterval(
-      publishContext,
-      500
-    );
+    function setEnabled(enabled: boolean): void {
+      if (!enabled) {
+        if (intervalId !== null) window.clearInterval(intervalId);
+        intervalId = null;
+        previousCode = "";
+        previousLanguage = "";
+        return;
+      }
+      if (intervalId !== null) return;
+      publishContext();
+      intervalId = window.setInterval(publishContext, 500);
+    }
 
-    publishContext();
+    window.addEventListener(CONTROL_EVENT_NAME, (event) => {
+      const detail = (event as CustomEvent<{ enabled?: boolean }>).detail;
+      setEnabled(detail?.enabled === true);
+    });
   },
 });

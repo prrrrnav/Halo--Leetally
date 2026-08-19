@@ -79,9 +79,6 @@ export class LocalVad {
 
       this.initialized = true;
 
-      console.log(
-        "[LeetAlly VAD] Initialized successfully",
-      );
     } catch (cause) {
       this.vad = null;
       this.initialized = false;
@@ -114,7 +111,6 @@ export class LocalVad {
     await this.vad.start();
     this.running = true;
 
-    console.log("[LeetAlly VAD] Listening");
   }
 
   async pause(): Promise<void> {

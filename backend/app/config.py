@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     cashfree_webhook_tolerance_seconds: int = 300
     minimum_billable_speech_ms: int = 400
     minimum_speech_rms: float = 0.003
+    ai_interview_trial_limit: int = 1
 
     model_config = SettingsConfigDict(
         env_file=".env",

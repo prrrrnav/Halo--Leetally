@@ -516,6 +516,21 @@ input {
   }
 }
 
+.leetally-panel-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.leetally-panel-brand img {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  object-fit: contain;
+  box-shadow: 0 0 14px rgba(77, 141, 255, 0.25);
+}
+
 .leetally-google-login {
   margin-bottom: 10px;
   color: #18181b;
