@@ -1,33 +1,49 @@
 import { browser } from "wxt/browser";
+import { parseAuthCallback } from "../lib/auth-callback";
 import { supabase } from "../lib/supabase";
 
 const websiteUrl = ((import.meta.env.VITE_WEBSITE_URL as string | undefined) || "https://leetally-web.vercel.app").replace(/\/$/, "");
 
 async function saveSessionFromCallback(callbackUrl: string): Promise<void> {
-  const callback = new URL(callbackUrl);
-  const hash = new URLSearchParams(callback.hash.slice(1));
-  const callbackError = callback.searchParams.get("error_description") ?? hash.get("error_description");
-  if (callbackError) throw new Error(callbackError);
-
-  const accessToken = hash.get("access_token");
-  const refreshToken = hash.get("refresh_token");
-  if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+  const result = parseAuthCallback(callbackUrl);
+  if (result.kind === "tokens") {
+    const { error } = await supabase.auth.setSession({
+      access_token: result.accessToken,
+      refresh_token: result.refreshToken,
+    });
     if (error) throw error;
     return;
   }
 
-  const code = callback.searchParams.get("code");
-  if (!code) throw new Error("The login did not return a LeetAlly session.");
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
+  const { error } = await supabase.auth.exchangeCodeForSession(result.code);
   if (error) throw error;
 }
 
-async function completeWebsiteSignIn(interactive: boolean, provider?: "google"): Promise<void> {
+async function completeGoogleSignIn(): Promise<void> {
+  const redirectUri = browser.identity.getRedirectURL("auth/callback");
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: redirectUri,
+      skipBrowserRedirect: true,
+      queryParams: { prompt: "select_account" },
+    },
+  });
+  if (error) throw error;
+  if (!data.url) throw new Error("Google sign-in could not be started.");
+
+  const callbackUrl = await browser.identity.launchWebAuthFlow({
+    url: data.url,
+    interactive: true,
+  });
+  if (!callbackUrl) throw new Error("Google sign-in was cancelled.");
+  await saveSessionFromCallback(callbackUrl);
+}
+
+async function completeWebsiteSignIn(interactive: boolean): Promise<void> {
   const redirectUri = browser.identity.getRedirectURL("auth/callback");
   const handoffUrl = new URL("/extension-auth", websiteUrl);
   handoffUrl.searchParams.set("redirect_uri", redirectUri);
-  if (provider) handoffUrl.searchParams.set("provider", provider);
   const callbackUrl = await browser.identity.launchWebAuthFlow({ url: handoffUrl.toString(), interactive });
   if (!callbackUrl) throw new Error(interactive ? "Login was cancelled." : "No website session is available.");
   await saveSessionFromCallback(callbackUrl);
@@ -43,8 +59,11 @@ export default defineBackground(() => {
         .catch((cause: unknown) => ({ ok: false, error: cause instanceof Error ? cause.message : "Website login failed." }));
     }
     if (request?.type !== "LEETALLY_GOOGLE_SIGN_IN") return undefined;
-    return completeWebsiteSignIn(true, "google")
-      .then(() => ({ ok: true }))
+    return completeGoogleSignIn()
+      .then(async () => {
+        await browser.runtime.sendMessage({ type: "LEETALLY_AUTH_REFRESH" }).catch(() => undefined);
+        return { ok: true };
+      })
       .catch((cause: unknown) => ({ ok: false, error: cause instanceof Error ? cause.message : "Google sign-in failed." }));
   });
 });

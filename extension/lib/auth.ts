@@ -2,6 +2,7 @@ import { browser } from "wxt/browser";
 import { supabase } from "./supabase";
 
 export const POLICY_VERSION = "2026-08-17";
+const WEBSITE_URL = ((import.meta.env.VITE_WEBSITE_URL as string | undefined) || "https://leetally-web.vercel.app").replace(/\/$/, "");
 
 export function googleOAuthRedirectUrl(): string {
   return browser.identity.getRedirectURL("auth/callback");
@@ -39,7 +40,15 @@ export async function signUpWithEmail(email: string, password: string): Promise<
     },
   });
   if (error) throw error;
+  if (!data.session && data.user && data.user.identities?.length === 0) {
+    throw new Error("An account with this email already exists. Sign in instead.");
+  }
   return !data.session;
+}
+
+export async function signOutOfExtension(): Promise<void> {
+  const { error } = await supabase.auth.signOut({ scope: "local" });
+  if (error) throw error;
 }
 
 export async function recordPolicyAcceptance(): Promise<void> {
@@ -53,6 +62,8 @@ export async function recordPolicyAcceptance(): Promise<void> {
 }
 
 export async function sendPasswordReset(email: string): Promise<void> {
-  const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${WEBSITE_URL}/login?recovery=1`,
+  });
   if (error) throw error;
 }

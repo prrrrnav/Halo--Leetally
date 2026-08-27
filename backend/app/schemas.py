@@ -74,6 +74,7 @@ class InterviewOut(InterviewCreate):
     user_id: str
     status: str
     created_at: datetime
+    access_tier: Literal["trial", "beta_monthly"] = "trial"
     phase: Literal["clarification", "approach", "coding", "testing", "complexity", "wrap_up"] = "clarification"
 
 
@@ -113,21 +114,6 @@ class MessageIn(BaseModel):
 
 class MessageOut(BaseModel):
     reply: str
-
-class SpeechSynthesisIn(BaseModel):
-    text: str = Field(
-        min_length=1,
-        max_length=5000,
-    )
-    company_id: Literal[
-        "google", "amazon", "meta", "ibm", "accenture", "tcs",
-        "hcltech", "american-express", "microsoft"
-    ] = "google"
-
-
-class SpeechSynthesisOut(BaseModel):
-    audio_base64: str
-    audio_content_type: str
 
 class InterviewTurnOut(BaseModel):
     transcript: str
@@ -171,13 +157,13 @@ class BillingPlanOut(BaseModel):
     interval: str | None = None
     supports_auto_renew: bool = False
     period_days: int = 30
+    features: list[str] = Field(default_factory=list)
 
 
 class BillingCheckoutIn(BaseModel):
-    plan_id: Literal["sde1_sprint", "sde1_intensive"]
+    plan_id: Literal["beta_monthly"]
     customer_name: str = Field(min_length=2, max_length=100)
     phone: str = Field(pattern=r"^[6-9][0-9]{9}$")
-    auto_renew: bool = False
 
 
 class BillingCheckoutOut(BaseModel):
@@ -192,14 +178,43 @@ class BillingCheckoutOut(BaseModel):
 
 class BillingEntitlementOut(BaseModel):
     plan_id: str | None = None
+    plan_name: str | None = None
     status: str
     is_lifetime: bool = False
     minutes_limit: int = 0
     minutes_used: int = 0
     minutes_remaining: int = 0
     speech_seconds_used: int = 0
+    speech_seconds_remaining: int = 0
+    usage_percent: int = 0
     auto_renew: bool = False
     period_start: datetime | None = None
     period_end: datetime | None = None
+    features: list[str] = Field(default_factory=list)
 class AccountDeleteIn(BaseModel):
     confirmation: str = Field(pattern=r"^DELETE$")
+
+
+class FriendRequestIn(BaseModel):
+    email: str = Field(
+        min_length=3,
+        max_length=320,
+        pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$",
+    )
+
+
+class FriendConnectionOut(BaseModel):
+    relationship_id: str
+    account_user_id: str
+    email: str
+    display_name: str | None = None
+    status: Literal["pending", "accepted"]
+    direction: Literal["sent", "received", "connected"]
+    username: str | None = None
+    avatar: str | None = None
+    ranking: int | None = None
+    total_solved: int = 0
+    easy_solved: int = 0
+    medium_solved: int = 0
+    hard_solved: int = 0
+    synced_at: datetime | None = None

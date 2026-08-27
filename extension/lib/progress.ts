@@ -34,6 +34,7 @@ export interface SheetProgress {
 
 export interface LeetCodeProfile {
   username: string;
+  verifiedOwner?: boolean;
   avatar?: string;
   ranking?: number;
   totalSolved: number;

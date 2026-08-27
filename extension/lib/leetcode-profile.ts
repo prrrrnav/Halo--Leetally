@@ -1,4 +1,4 @@
-import type { LeetCodeProfile, TrackedFriend } from "./progress";
+import type { LeetCodeProfile } from "./progress";
 
 interface GraphQLResponse<T> { data?: T; errors?: Array<{ message: string }> }
 
@@ -6,6 +6,11 @@ interface DailyChallengeResponse {
   dailyCodingChallengeV2?: {
     challenges?: Array<{ date: string; userStatus: string | null }>;
   };
+}
+
+interface AcceptedQuestion {
+  questionFrontendId: string;
+  titleSlug: string;
 }
 
 async function queryLeetCode<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
@@ -19,6 +24,68 @@ async function queryLeetCode<T>(query: string, variables: Record<string, unknown
   const result = await response.json() as GraphQLResponse<T>;
   if (!result.data || result.errors?.length) throw new Error(result.errors?.[0]?.message || "LeetCode account data unavailable");
   return result.data;
+}
+
+function uniqueAcceptedQuestions(questions: AcceptedQuestion[]): AcceptedQuestion[] {
+  return questions.filter((question, index, all) =>
+    all.findIndex((candidate) => candidate.questionFrontendId === question.questionFrontendId) === index);
+}
+
+async function fetchAcceptedQuestionHistory(expectedAcceptedCount: number): Promise<AcceptedQuestion[]> {
+  try {
+    const response = await fetch("https://leetcode.com/api/problems/all/", {
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const result = await response.json() as {
+      stat_status_pairs?: Array<{
+        status?: string | null;
+        stat?: { frontend_question_id?: number | string; question__title_slug?: string };
+      }>;
+    };
+    if (!Array.isArray(result.stat_status_pairs)) throw new Error("Missing stat_status_pairs");
+    const accepted = uniqueAcceptedQuestions(result.stat_status_pairs
+      .filter((question) => question.status === "ac")
+      .map((question) => ({
+        questionFrontendId: String(question.stat?.frontend_question_id ?? ""),
+        titleSlug: question.stat?.question__title_slug ?? "",
+      }))
+      .filter((question) => question.questionFrontendId && question.titleSlug));
+    if (expectedAcceptedCount > 0 && accepted.length === 0) {
+      throw new Error("Authenticated endpoint returned no accepted rows");
+    }
+    return accepted;
+  } catch (cause) {
+    console.warn("[LeetAlly sync] Accepted-history endpoint unavailable; using paginated GraphQL.", {
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+
+  const pageSize = 100;
+  const maximumQuestions = 5000;
+  const questions: AcceptedQuestion[] = [];
+  let skip = 0;
+  while (skip < maximumQuestions) {
+    const page = await queryLeetCode<{
+      problemsetQuestionList: {
+        totalNum: number;
+        data: Array<AcceptedQuestion & { status: string | null }>;
+      };
+    }>(`
+      query acceptedQuestions($limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
+        problemsetQuestionList: questionList(categorySlug: "", limit: $limit, skip: $skip, filters: $filters) {
+          totalNum
+          data { questionFrontendId titleSlug status }
+        }
+      }
+    `, { limit: pageSize, skip, filters: {} });
+    const rows = page.problemsetQuestionList?.data ?? [];
+    questions.push(...rows.filter((question) => question.status === "ac"));
+    if (!rows.length || skip + rows.length >= (page.problemsetQuestionList?.totalNum ?? 0)) break;
+    skip += rows.length;
+  }
+  return uniqueAcceptedQuestions(questions);
 }
 
 function mergeSubmissionCalendar(target: Record<string, number>, rawCalendar?: string): void {
@@ -79,33 +146,6 @@ async function fetchYearCalendars(username: string): Promise<Record<string, numb
   return activity;
 }
 
-export async function fetchLeetCodeFriend(username: string): Promise<TrackedFriend> {
-  const normalized = username.trim();
-  if (!normalized) throw new Error("Enter a LeetCode username");
-  const data = await queryLeetCode<{ matchedUser: null | { username: string; profile: { userAvatar: string; ranking: number }; submitStats: { acSubmissionNum: Array<{ difficulty: string; count: number }> } } }>(`
-    query friendProfile($username: String!) {
-      matchedUser(username: $username) {
-        username
-        profile { userAvatar ranking }
-        submitStats { acSubmissionNum { difficulty count } }
-      }
-    }
-  `, { username: normalized });
-  if (!data.matchedUser) throw new Error("LeetCode user not found");
-  const friend = data.matchedUser;
-  const solved = Object.fromEntries(friend.submitStats.acSubmissionNum.map((item) => [item.difficulty, item.count]));
-  return {
-    username: friend.username,
-    avatar: friend.profile?.userAvatar,
-    ranking: friend.profile?.ranking,
-    totalSolved: solved.All ?? 0,
-    easySolved: solved.Easy ?? 0,
-    mediumSolved: solved.Medium ?? 0,
-    hardSolved: solved.Hard ?? 0,
-    syncedAt: new Date().toISOString(),
-  };
-}
-
 export async function syncLeetCodeProfile(usernameOverride?: string): Promise<LeetCodeProfile> {
   let username = usernameOverride?.trim();
   let signedInUsername = "";
@@ -130,34 +170,35 @@ export async function syncLeetCodeProfile(usernameOverride?: string): Promise<Le
     }`, { username });
   const user = data.matchedUser;
   const solved = Object.fromEntries(user.submitStats.acSubmissionNum.map((item) => [item.difficulty, item.count]));
+  const verifiedOwner = signedInUsername.toLowerCase() === username.toLowerCase();
   const [yearActivity, dailyChallengeActivity] = await Promise.all([
     fetchYearCalendars(username),
-    fetchDailyChallengeActivity(),
+    verifiedOwner ? fetchDailyChallengeActivity() : Promise.resolve({}),
   ]);
   const submissionActivity: Record<string, number> = {};
   mergeSubmissionCalendar(submissionActivity, user.userCalendar?.submissionCalendar);
   Object.assign(submissionActivity, yearActivity);
   let acceptedSlugs = [...new Set((data.recentAcSubmissionList ?? []).map((item) => item.titleSlug))];
   let acceptedProblemIds: number[] = [];
-  if (signedInUsername.toLowerCase() === username.toLowerCase()) {
+  if (verifiedOwner) {
     try {
-      const accepted = await queryLeetCode<{ problemsetQuestionList: { data: Array<{ questionFrontendId: string; titleSlug: string; status: string | null }> } }>(`
-        query acceptedQuestions($limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
-          problemsetQuestionList: questionList(categorySlug: "", limit: $limit, skip: $skip, filters: $filters) {
-            totalNum
-            data { questionFrontendId titleSlug status }
-          }
-        }
-      `, { limit: 3000, skip: 0, filters: {} });
-      const complete = accepted.problemsetQuestionList?.data?.filter((question) => question.status === "ac") ?? [];
+      const complete = await fetchAcceptedQuestionHistory(solved.All ?? 0);
       acceptedProblemIds = [...new Set(complete.map((question) => Number(question.questionFrontendId)).filter(Number.isFinite))];
       if (complete.length) acceptedSlugs = [...new Set(complete.map((question) => question.titleSlug))];
-    } catch {
-      // Fall back to public recent accepts when the signed-in query is unavailable.
+      if ((solved.All ?? 0) > 0 && acceptedProblemIds.length === 0) {
+        throw new Error("LeetCode returned no accepted-question history for this signed-in account.");
+      }
+    } catch (cause) {
+      console.error("[LeetAlly sync] Full accepted history import failed.", {
+        error: cause instanceof Error ? cause.message : String(cause),
+        totalSolved: solved.All ?? 0,
+      });
+      throw new Error("Your profile loaded, but LeetCode accepted history could not be imported. Reload leetcode.com and press Refresh again.");
     }
   }
   return {
     username: user.username, avatar: user.profile?.userAvatar, ranking: user.profile?.ranking,
+    verifiedOwner: verifiedOwner && username.toLowerCase() === user.username.toLowerCase(),
     totalSolved: solved.All ?? 0, easySolved: solved.Easy ?? 0, mediumSolved: solved.Medium ?? 0, hardSolved: solved.Hard ?? 0,
     streak: user.userCalendar?.streak ?? 0, totalActiveDays: user.userCalendar?.totalActiveDays ?? 0, syncedAt: new Date().toISOString(),
     acceptedSlugs,

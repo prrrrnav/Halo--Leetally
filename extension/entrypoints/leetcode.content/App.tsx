@@ -13,7 +13,6 @@ import {
   createInterview,
   completeInterview,
   submitInterviewAudio,
-  synthesizeSpeech,
   updateInterviewContext,
   type InterviewAssessment,
   type InterviewPhase,
@@ -21,8 +20,8 @@ import {
 
 import { LeetCodeAdapter } from "../../lib/leetcode.ts";
 import { supabase } from "../../lib/supabase.ts";
-import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signUpWithEmail, syncWebsiteSession } from "../../lib/auth.ts";
-import { reconcileProgressWithCloud, startCloudProgressSync } from "../../lib/cloud-progress.ts";
+import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signOutOfExtension, signUpWithEmail, syncWebsiteSession } from "../../lib/auth.ts";
+import { clearLocalAccountProgress, reconcileProgressWithCloud, startCloudProgressSync } from "../../lib/cloud-progress.ts";
 import type { TTSStatus } from "../../lib/tts/types.ts";
 
 import { LocalVad } from "../../lib/voice/local-vad.ts";
@@ -42,7 +41,7 @@ import {
   type TargetCompanyId,
 } from "../../lib/progress.ts";
 import { syncLeetCodeProfile } from "../../lib/leetcode-profile.ts";
-import { updateSelectedSheetProgress } from "../../lib/sheet-progress.ts";
+import { updateAllSheetProgress } from "../../lib/sheet-progress.ts";
 import { findProblemCompanies, loadCompanyCatalog } from "../../lib/company-problems.ts";
 import {
   InterviewerMark,
@@ -354,14 +353,17 @@ export default function App() {
     if (!policiesAccepted) return;
     async function syncProfile(): Promise<void> {
       try {
-        const profile = await syncLeetCodeProfile();
         const current = await loadProgress();
+        if (!current.profile?.username) return;
+        const profile = await syncLeetCodeProfile(current.profile.username);
         targetCompanyRef.current = current.planner.targetCompany;
-        const sheets = await updateSelectedSheetProgress(
-          current.sheets,
-          profile.acceptedSlugs ?? [],
-          profile.acceptedProblemIds ?? [],
-        );
+        const sheets = profile.verifiedOwner
+          ? await updateAllSheetProgress(
+            current.sheets,
+            profile.acceptedSlugs ?? [],
+            profile.acceptedProblemIds ?? [],
+          )
+          : current.sheets;
         const latest = await loadProgress();
         targetCompanyRef.current = latest.planner.targetCompany;
         await saveProgress({
@@ -376,7 +378,7 @@ export default function App() {
       } catch { /* Profile sync is optional. */ }
     }
     void syncProfile();
-  }, [policiesAccepted]);
+  }, [policiesAccepted, session?.user.id]);
 
   // Track successful submissions independently of whether the dashboard is open.
   useEffect(() => {
@@ -401,13 +403,33 @@ export default function App() {
           ? rawDifficulty
           : "medium";
       const current = await loadProgress();
-      const updated = recordSolved(
+      let updated = recordSolved(
         current,
         adapter.getProblemSlug(),
         difficulty,
       );
 
       if (updated !== current && !disposed) {
+        if (current.profile?.username) {
+          try {
+            const profile = await syncLeetCodeProfile(current.profile.username);
+            if (profile.verifiedOwner) {
+              const sheets = await updateAllSheetProgress(
+                updated.sheets,
+                profile.acceptedSlugs ?? [],
+                profile.acceptedProblemIds ?? [],
+              );
+              updated = {
+                ...updated,
+                profile,
+                sheets,
+                activity: { ...updated.activity, ...(profile.submissionActivity ?? {}) },
+              };
+            }
+          } catch {
+            // Keep the locally recorded accepted submission and retry profile sync later.
+          }
+        }
         await saveProgress(updated);
       }
     }
@@ -426,7 +448,7 @@ export default function App() {
       disposed = true;
       observer.disconnect();
     };
-  }, [policiesAccepted]);
+  }, [policiesAccepted, session?.user.id]);
 
   useEffect(() => {
     interviewIdRef.current = interviewId;
@@ -618,13 +640,14 @@ export default function App() {
   async function resetPassword(): Promise<void> {
     if (!email.trim()) { setError("Enter your email first."); return; }
     setError(null); setAuthBusy(true);
-    try { await sendPasswordReset(email); setAuthNotice("Password reset email sent."); }
+    try { await sendPasswordReset(email); setAuthNotice("If an account exists for that email, a password reset link has been sent."); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Could not send reset email."); }
     finally { setAuthBusy(false); }
   }
 
   function stopFishAudio(): void {
     stopAILevelMeter();
+    window.speechSynthesis?.cancel();
 
     const audio = fishAudioRef.current;
     const cancelPlayback = fishAudioCancelRef.current;
@@ -693,39 +716,6 @@ export default function App() {
       measure();
     } catch {
       aiAudioLevelRef.current = 0.18;
-    }
-  }
-
-  async function speak(
-    text: string,
-  ): Promise<void> {
-    const normalizedText = text.trim();
-
-    if (!normalizedText) {
-      return;
-    }
-
-    setError(null);
-    setTTSStatus("loading");
-
-    try {
-      stopFishAudio();
-      const result = await synthesizeSpeech(
-        normalizedText,
-        targetCompanyRef.current,
-      );
-      await playBackendAudio(
-        result.audio_base64,
-        result.audio_content_type,
-      );
-    } catch (cause) {
-      const message =
-        cause instanceof Error
-          ? cause.message
-          : "Unable to play Fish Audio.";
-
-      setError(message);
-      setTTSStatus("error");
     }
   }
 
@@ -960,7 +950,21 @@ export default function App() {
     processCapturedSpeech;
 
   async function testVoice(): Promise<void> {
-    await speak("Hello. I am your LeetAlly interviewer. Voice is ready.");
+    setError(null);
+    stopFishAudio();
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      setError("Voice preview is not supported in this browser.");
+      setTTSStatus("error");
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(
+      "Hello. I am your LeetAlly interviewer. Voice is ready.",
+    );
+    utterance.onstart = () => setTTSStatus("speaking");
+    utterance.onend = () => setTTSStatus("idle");
+    utterance.onerror = () => setTTSStatus("error");
+    setTTSStatus("loading");
+    window.speechSynthesis.speak(utterance);
   }
 
   function stopVoice(): void {
@@ -989,6 +993,15 @@ export default function App() {
 
     try {
       setStatus("starting");
+      if (vadInitializationRef.current) {
+        await vadInitializationRef.current;
+      }
+      if (!vadRef.current) {
+        throw new Error("Voice detection is unavailable.");
+      }
+      // Obtain microphone access before the backend claims a one-time trial.
+      // The callbacks ignore audio until runningRef becomes true.
+      await vadRef.current.start();
       setEditorCollectionEnabled(true);
       await new Promise((resolve) => window.setTimeout(resolve, 100));
 
@@ -1061,24 +1074,13 @@ export default function App() {
       setInterviewPhase("clarification");
       setStatus("running");
 
-      if (vadInitializationRef.current) {
-        await vadInitializationRef.current;
-      }
-
-      if (!vadRef.current) {
-        throw new Error(
-          "Voice detection is unavailable.",
-        );
-      }
-
-      await vadRef.current.start();
-
       // Do not call paid TTS before the candidate speaks. The opening prompt is
       // already visible in the conversation panel.
     } catch (cause) {
       setEditorCollectionEnabled(false);
       runningRef.current = false;
       interviewIdRef.current = null;
+      void vadRef.current?.pause();
 
       setStatus("idle");
       setInterviewId(null);
@@ -1408,7 +1410,7 @@ export default function App() {
                 disabled={authBusy || !policiesAccepted}
                 onClick={() => void authenticateWithGoogle()}
               >
-                <b>G</b> Continue with Google
+                <img src={browser.runtime.getURL("/google.svg")} alt="" aria-hidden="true" /> Continue with Google
               </button>
 
               <div className="leetally-auth-divider"><span>or use email</span></div>
@@ -1457,11 +1459,15 @@ export default function App() {
                 type="button"
                 className="leetally-logout"
                 disabled={running}
-                onClick={() =>
-                  void supabase.auth.signOut()
-                }
+                onClick={() => {
+                  setError(null); setAuthBusy(true);
+                  void signOutOfExtension()
+                    .then(() => clearLocalAccountProgress())
+                    .catch((cause) => setError(cause instanceof Error ? cause.message : "Sign out failed."))
+                    .finally(() => setAuthBusy(false));
+                }}
               >
-                Logout
+                {authBusy ? "Signing out…" : "Logout"}
               </button>
             </>
           )}

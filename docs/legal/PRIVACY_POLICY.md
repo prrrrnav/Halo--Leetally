@@ -32,6 +32,10 @@ unrelated to a user-facing LeetAlly feature.
   scores.
 - Progress data: LeetCode username, public profile statistics, accepted problem
   identifiers, selected study sheets, goals, activity and interview history.
+- Friend data: account-to-account friend requests and the email/display name
+  needed to identify each request. A friend's sanitized public LeetCode totals
+  are shown only after that account accepts; private sheets, solved-problem
+  lists, activity details and interviews are not shared.
 - Billing data: plan, entitlement, usage, transaction references and payment
   status. Payment credentials are handled by Cashfree and are not stored by us.
 - Technical data: extension version, provider errors, timestamps, request IDs,
@@ -61,7 +65,8 @@ legitimate interests.
 
 We obtain data directly from you, from the Google account you choose to connect,
 from the supported page on which you activate LeetAlly, and from public LeetCode
-profile information when you choose profile syncing.
+profile information when you choose profile syncing. Friend progress sharing is
+based on an explicit request and acceptance and can be ended by either account.
 
 ## 4. Service providers
 

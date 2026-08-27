@@ -6,9 +6,12 @@ entitlements.
 
 ## 1. Apply the database migration
 
-Run `supabase/migrations/0003_identity_progress.sql` in the Supabase SQL editor,
-or run `supabase db push` from a linked Supabase CLI project. This creates the
-private `user_progress` table and its row-level-security policy.
+Apply the repository migrations through
+`supabase/migrations/0009_auth_signup_reliability.sql` in the Supabase SQL
+Editor. This production project has previously had schema changes without a
+matching remote migration history, so do not run `supabase db push` until that
+history has been explicitly reconciled. The migrations create the private
+progress tables, row-level-security policies, and reliable Auth profile trigger.
 
 ## 2. Get the Chrome OAuth callback
 
@@ -44,6 +47,12 @@ In Supabase Dashboard -> Authentication -> URL Configuration:
 The Google client secret belongs only in Supabase. Never place it in the
 extension or a `VITE_` environment variable.
 
+The extension starts the Supabase Google authorization URL directly with
+`chrome.identity.launchWebAuthFlow`. After Google redirects to the Chromium
+callback from step 2, Chrome closes the auth window and the extension stores the
+returned Supabase session. The public website is not part of this Google-login
+round trip.
+
 ## 5. Enable email/password
 
 In Supabase Dashboard -> Authentication -> Providers -> Email:
@@ -74,8 +83,8 @@ production, connect Resend:
 - Keep only the Supabase URL and anon/publishable key in `extension/.env`.
 - Keep service-role, Google client secret, Resend key, and Cashfree secrets on
   trusted services only.
-- Apply `0001_initial.sql`, `0002_billing.sql`, and
-  `0003_identity_progress.sql` to the same Supabase project.
+- Apply migrations `0001_initial.sql` through
+  `0009_auth_signup_reliability.sql` to the same Supabase project.
 - Restart FastAPI, rebuild the extension, reload it in Chrome, and refresh the
   open LeetCode tab.
 - Test Google login, email confirmation, email login, password reset, logout,

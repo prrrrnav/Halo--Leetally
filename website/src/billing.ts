@@ -1,7 +1,7 @@
 const apiUrl = ((import.meta.env.VITE_API_URL as string | undefined) || "https://leetally-api.vercel.app/api/v1").replace(/\/$/, "");
 
 export type BillingPlan = {
-  id: "sde1_sprint" | "sde1_intensive";
+  id: "beta_monthly";
   name: string;
   purchase_type: "one_time" | "subscription";
   amount_inr: number;
@@ -10,16 +10,22 @@ export type BillingPlan = {
   interval: string | null;
   supports_auto_renew: boolean;
   period_days: number;
+  features: string[];
 };
 
 export type BillingEntitlement = {
   plan_id?: string;
+  plan_name?: string;
   status: "none" | "active" | "past_due" | "cancelled" | "expired";
   auto_renew: boolean;
   minutes_limit: number;
   minutes_used: number;
   minutes_remaining: number;
+  speech_seconds_used: number;
+  speech_seconds_remaining: number;
+  usage_percent: number;
   period_end?: string;
+  features: string[];
 };
 
 export type BillingCheckout = {
@@ -30,6 +36,12 @@ export type BillingCheckout = {
   currency: string;
   session_id: string;
   environment: "sandbox" | "production";
+};
+
+export type FriendConnection = {
+  relationship_id: string;
+  status: "pending" | "accepted";
+  direction: "sent" | "received" | "connected";
 };
 
 async function request<T>(path: string, init?: RequestInit, accessToken?: string): Promise<T> {
@@ -43,7 +55,7 @@ async function request<T>(path: string, init?: RequestInit, accessToken?: string
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(typeof payload.detail === "string" ? payload.detail : "Billing is temporarily unavailable.");
+    throw new Error(typeof payload.detail === "string" ? payload.detail : "This service is temporarily unavailable.");
   }
   return response.json() as Promise<T>;
 }
@@ -52,7 +64,7 @@ export const getBillingPlans = () => request<BillingPlan[]>("/billing/plans");
 export const getEntitlement = (token: string) => request<BillingEntitlement>("/billing/me", undefined, token);
 export const createCheckout = (
   token: string,
-  body: { plan_id: BillingPlan["id"]; customer_name: string; phone: string; auto_renew: boolean },
+  body: { plan_id: BillingPlan["id"]; customer_name: string; phone: string },
 ) => request<BillingCheckout>("/billing/checkout", { method: "POST", body: JSON.stringify(body) }, token);
 export const cancelRenewal = (token: string) => request<{ cancelled: boolean; access_until: string }>(
   "/billing/cancel", { method: "POST" }, token,
@@ -62,6 +74,9 @@ export const exportAccountData = (token: string) => request<Record<string, unkno
 );
 export const deleteAccount = (token: string) => request<{ deleted: boolean }>(
   "/account", { method: "DELETE", body: JSON.stringify({ confirmation: "DELETE" }) }, token,
+);
+export const getFriendConnections = (token: string) => request<FriendConnection[]>(
+  "/friends", undefined, token,
 );
 
 type CashfreeResult = Promise<{ error?: { message?: string } }>;

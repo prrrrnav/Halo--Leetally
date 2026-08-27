@@ -32,11 +32,14 @@ export default function ProgressDashboard(props: Props) {
 
   useEffect(() => { void loadProgress().then(setProgress); }, []);
 
-  const days = useMemo(() => Array.from({ length: 30 }, (_, index) => {
-    const date = new Date();
-    date.setDate(date.getDate() - (29 - index));
-    return { key: localDateKey(date), date };
-  }), []);
+  const days = useMemo(() => {
+    const now = new Date();
+    const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Array.from({ length: totalDays }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth(), index + 1);
+      return { key: localDateKey(date), date };
+    });
+  }, []);
 
   if (!progress) return <aside className="leetally-dashboard"><div className="dashboard-loading">Loading progress…</div></aside>;
 
@@ -86,14 +89,15 @@ export default function ProgressDashboard(props: Props) {
       </section>
 
       <section className="dashboard-card activity-card">
-        <header><strong>30-Day Activity</strong><span><b>{days.filter(({ key }) => progress.activity[key]).length}/30</b> · Less <i /> <i /> <i /> <i /> More</span></header>
-        <div className="activity-grid">
+        <header><strong>{days[0].date.toLocaleDateString(undefined, { month: "long" })} Activity</strong><span><b>{days.filter(({ key }) => progress.activity[key]).length}/{days.length}</b> · Less <i /> <i /> <i /> <i /> More</span></header>
+        <div className="activity-grid" style={{ gridTemplateColumns: `repeat(${Math.ceil(days.length / 2)}, minmax(0, 1fr))` }}>
           {days.map(({ key, date }) => {
             const amount = progress.activity[key] ?? 0;
-            return <span key={key} className={`activity-cell level-${Math.min(3, amount)} ${key === localDateKey() ? "today" : ""}`} title={`${date.toLocaleDateString()}: ${amount} solved`} />;
+            const label = `${date.toLocaleDateString()}: ${amount} solved`;
+            return <span key={key} className={`activity-cell level-${Math.min(3, amount)} ${key === localDateKey() ? "today" : ""}`} title={label} aria-label={label} aria-current={key === localDateKey() ? "date" : undefined} />;
           })}
         </div>
-        <footer><span>{days[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><span>Today</span></footer>
+        <footer><span>{days[0].date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span><span>{days.at(-1)?.date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></footer>
       </section>
 
       <section className="dashboard-card sheets-card">

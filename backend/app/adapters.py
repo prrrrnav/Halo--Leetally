@@ -155,6 +155,7 @@ class InMemoryInterviewRepository(InterviewRepository):
             status="created",
             created_at=datetime.now(timezone.utc),
             screen_context=screen_context,
+            access_tier=data.get("access_tier", "trial"),
             target_company=data.get("target_company"),
             interview_type=data.get("interview_type", "dsa"),
         )
@@ -336,6 +337,7 @@ class SupabaseInterviewRepository(InterviewRepository):
                 problem_topics=row.get("problem_topics") or [],
                 interview_companies=row.get("interview_companies") or [],
             ),
+            access_tier=row.get("access_tier", "trial"),
             target_company=row.get("target_company"),
             interview_type=row.get("interview_type", "dsa"),
             level=row.get("level", "sde1"),
@@ -371,6 +373,7 @@ class SupabaseInterviewRepository(InterviewRepository):
                 "interview_type": data.get("interview_type", "dsa"),
                 "level": data.get("level", "sde1"),
                 "phase": "clarification",
+                "access_tier": data.get("access_tier", "trial"),
             },
         )
         rows = response.json()

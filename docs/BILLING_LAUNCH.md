@@ -4,7 +4,7 @@ The application is designed so the browser never grants paid access. A signed Ca
 
 ## 1. Apply the database migrations
 
-Apply every migration in `supabase/migrations` in filename order. Migration `0002_billing.sql` creates the billing tables; `0004_speech_only_usage.sql` makes detected speech the billable unit; `0006_sde1_pricing_and_expiry.sql` adds the launch plans, expiry, AutoPay state and lifecycle RPCs.
+Apply every migration in `supabase/migrations` in filename order through `0014_account_friend_connections.sql`. Migration `0012` adds the single beta plan, per-interview access tier and duplicate/late-webhook protections. Migration `0013` preserves the full paid duration when renewal events arrive early or out of order. Migration `0014` adds server-only, consent-based friend relationships and does not change billing behavior.
 
 Do not expose billing tables to the browser. They intentionally have no `anon` or `authenticated` RLS policies; only the backend service role may read or change them.
 
@@ -21,7 +21,8 @@ CASHFREE_ENVIRONMENT=sandbox
 CASHFREE_CLIENT_ID=YOUR_SERVER_ONLY_CLIENT_ID
 CASHFREE_CLIENT_SECRET=YOUR_SERVER_ONLY_CLIENT_SECRET
 CASHFREE_API_VERSION=2025-01-01
-BILLING_RETURN_URL=https://leetally-web.vercel.app/pricing?payment=return
+BILLING_RETURN_URL=https://YOUR_API_DOMAIN/api/v1/billing/return
+BILLING_CUSTOMER_RETURN_URL=https://leetally-web.vercel.app/pricing?payment=return
 CORS_ORIGINS=https://leetally-web.vercel.app
 ```
 
@@ -52,19 +53,20 @@ Set these Vercel variables and redeploy:
 VITE_API_URL=https://YOUR_API_DOMAIN/api/v1
 VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+VITE_BILLING_ENABLED=true
 ```
 
 ## 5. Sandbox acceptance test
 
 1. Sign up with a fresh user.
-2. Buy Sprint as a one-time pass and complete sandbox payment.
+2. Subscribe to LeetAlly Beta Monthly and complete sandbox authorization/payment.
 3. Confirm no access appears before the webhook arrives.
 4. Confirm `/api/v1/billing/me` reports `active`, 240 minutes and an end date 30 days later.
-5. Repeat with AutoPay selected and confirm `auto_renew: true`.
+5. Confirm the account dashboard and extension show usage, period end and `auto_renew: true`.
 6. Cancel AutoPay from the pricing page. Confirm access remains active through the paid end date and `auto_renew: false`.
 7. Send a duplicate webhook and confirm the allowance does not reset twice.
 8. Send a wrong-amount, stale-timestamp and invalid-signature webhook; each must fail without granting access.
 9. Set a test entitlement end date in the past and confirm the API returns `expired` and interview endpoints refuse paid use.
 10. Confirm silent microphone time does not change `speech_seconds_used`.
 
-Move to production credentials only after all ten checks pass and Cashfree has enabled the required payment methods for the merchant account.
+Move to production credentials only after all ten checks pass, Cashfree KYC is complete, required payment methods are enabled, and refund/cancellation/tax/support information is published.

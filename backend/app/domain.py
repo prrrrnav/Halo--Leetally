@@ -25,6 +25,7 @@ class Interview:
     status: str
     created_at: datetime
     screen_context: InterviewScreenContext
+    access_tier: str = "trial"
     target_company: str | None = None
     interview_type: str = "dsa"
     level: str = "sde1"

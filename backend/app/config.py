@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     cashfree_environment: str = "sandbox"
     cashfree_api_version: str = "2025-01-01"
     billing_return_url: str = "http://localhost:8000/api/v1/billing/return"
+    billing_customer_return_url: str = "http://localhost:5173/pricing?payment=return"
     cashfree_webhook_tolerance_seconds: int = 300
     minimum_billable_speech_ms: int = 400
     minimum_speech_rms: float = 0.003

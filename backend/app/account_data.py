@@ -76,6 +76,15 @@ class SupabaseAccountDataService:
         checkouts = await self._rows(
             "billing_checkouts", {"user_id": f"eq.{user_id}"}
         )
+        friend_connections = await self._rows(
+            "friend_connections",
+            {
+                "or": (
+                    f"(requester_user_id.eq.{user_id},"
+                    f"addressee_user_id.eq.{user_id})"
+                )
+            },
+        )
         return {
             "account": {"id": user_id, "email": email},
             "profile": await self._rows("profiles", {"id": f"eq.{user_id}"}),
@@ -97,6 +106,10 @@ class SupabaseAccountDataService:
             ),
             "contact_requests": await self._rows(
                 "contact_requests", {"user_id": f"eq.{user_id}"}
+            ),
+            "friend_connections": friend_connections,
+            "friend_request_attempts": await self._rows(
+                "friend_request_attempts", {"requester_user_id": f"eq.{user_id}"}
             ),
         }
 

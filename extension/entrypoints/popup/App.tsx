@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { browser } from "wxt/browser";
 import type { Session } from "@supabase/supabase-js";
-import { getBillingEntitlement, type BillingEntitlement } from "../../lib/api";
-import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signUpWithEmail, syncWebsiteSession } from "../../lib/auth";
-import { reconcileProgressWithCloud, startCloudProgressSync } from "../../lib/cloud-progress";
+import { acceptFriendRequest, addFriendByEmail, getBillingEntitlement, listFriendConnections, removeFriendConnection, type AccountFriendConnection, type BillingEntitlement } from "../../lib/api";
+import { POLICY_VERSION, recordPolicyAcceptance, sendPasswordReset, signInWithEmail, signInWithGoogle, signOutOfExtension, signUpWithEmail, syncWebsiteSession } from "../../lib/auth";
+import { clearLocalAccountProgress, reconcileProgressWithCloud, removeLeetCodeIdentity, saveLinkedLeetCodeProgress, startCloudProgressSync, unlinkLeetCodeIdentity } from "../../lib/cloud-progress";
 import { COMPANY_OPTIONS, FEATURED_COMPANIES, loadCompanyCatalog, refreshCompanyCatalog, type CompanyGroup, type CompanyId, type CompanyProblem, type CompanyProblemList } from "../../lib/company-problems";
-import { fetchLeetCodeFriend, syncLeetCodeProfile } from "../../lib/leetcode-profile";
-import { updateSelectedSheetProgress } from "../../lib/sheet-progress";
+import { syncLeetCodeProfile } from "../../lib/leetcode-profile";
+import { updateAllSheetProgress } from "../../lib/sheet-progress";
 import { calculateStreak, DEFAULT_PROGRESS, INTERVIEW_COMPANIES, loadProgress, localDateKey, saveProgress, type InterviewType, type ProgressData, type TargetCompanyId } from "../../lib/progress";
 import { supabase } from "../../lib/supabase";
 
@@ -44,7 +44,8 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
   const [username, setUsername] = useState("");
-  const [friendUsername, setFriendUsername] = useState("");
+  const [friendEmail, setFriendEmail] = useState("");
+  const [friendConnections, setFriendConnections] = useState<AccountFriendConnection[]>([]);
   const [friendNotice, setFriendNotice] = useState("");
   const [syncingFriend, setSyncingFriend] = useState("");
   const [selectedCompany, setSelectedCompany] = useState<CompanyId>("google");
@@ -114,14 +115,35 @@ export default function App() {
     return () => { active = false; };
   }, [view]);
 
-  const days = useMemo(() => Array.from({ length: 30 }, (_, index) => { const date = new Date(); date.setDate(date.getDate() - (29 - index)); return { key: localDateKey(date), date }; }), []);
+  const days = useMemo(() => {
+    const now = new Date();
+    const totalDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return Array.from({ length: totalDays }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth(), index + 1);
+      return { key: localDateKey(date), date };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
+      setFriendConnections([]);
+      return;
+    }
+    let active = true;
+    void listFriendConnections()
+      .then((connections) => { if (active) setFriendConnections(connections); })
+      .catch(() => { if (active) setFriendNotice("Friend connections could not be loaded."); });
+    return () => { active = false; };
+  }, [session?.user.id]);
   const profile = progress.profile;
   const localSolved = Object.keys(progress.solvedSlugs).length;
   const selectedSheets = progress.sheets.filter((sheet) => sheet.selected);
   const todayCount = progress.activity[localDateKey()] ?? 0;
   const dailyPercent = Math.min(100, Math.round(todayCount / progress.planner.dailyProblemGoal * 100));
   const activeDays = days.filter(({ key }) => (progress.activity[key] ?? 0) > 0).length;
+  const activityMonth = days[0]?.date.toLocaleDateString(undefined, { month: "long" });
   const firstActivityDate = days[0]?.date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const lastActivityDate = days.at(-1)?.date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   const localDifficulties = Object.values(progress.solvedSlugs).reduce((counts, difficulty) => ({ ...counts, [difficulty]: counts[difficulty] + 1 }), { easy: 0, medium: 0, hard: 0 });
   const difficultyCounts = profile
     ? { easy: profile.easySolved, medium: profile.mediumSolved, hard: profile.hardSolved }
@@ -152,7 +174,7 @@ export default function App() {
     persist({ ...progress, sheets: nextSheets });
     if (selected && profile?.acceptedSlugs?.length) {
       setSyncing(true);
-      const sheets = await updateSelectedSheetProgress(nextSheets, profile.acceptedSlugs, profile.acceptedProblemIds ?? []);
+      const sheets = await updateAllSheetProgress(nextSheets, profile.acceptedSlugs, profile.acceptedProblemIds ?? []);
       persist({ ...progress, sheets });
       setSyncing(false);
     }
@@ -175,8 +197,10 @@ export default function App() {
         ? synced.acceptedProblemIds ?? []
         : previousIds;
       completeProfile.acceptedProblemIds = acceptedProblemIds;
-      const sheets = await updateSelectedSheetProgress(progress.sheets, acceptedSlugs, acceptedProblemIds);
-      persist({
+      const sheets = synced.verifiedOwner
+        ? await updateAllSheetProgress(progress.sheets, acceptedSlugs, acceptedProblemIds)
+        : progress.sheets;
+      const updated = {
         ...progress,
         profile: completeProfile,
         sheets,
@@ -184,50 +208,92 @@ export default function App() {
           ...progress.activity,
           ...(completeProfile.submissionActivity ?? {}),
         },
-      });
+      };
+      if (session && synced.verifiedOwner) {
+        await saveLinkedLeetCodeProgress(session.user.id, synced.username, updated);
+      }
+      persist(updated);
       setUsername(synced.username);
-      setNotice(
-        acceptedProblemIds.length
-          ? `Synced ${acceptedProblemIds.length} accepted problems and ${sheets.filter((sheet) => sheet.selected && sheet.autoTracked).length} sheets`
-          : "Profile loaded, but detailed history needs the same account signed in on leetcode.com.",
-      );
+      if (acceptedProblemIds.length) {
+        setNotice(`Synced ${acceptedProblemIds.length} accepted problems across ${sheets.filter((sheet) => sheet.autoTracked).length} sheets${session ? "." : " locally. Sign in to LeetAlly for cloud backup."}`);
+      } else {
+        setNotice(`Tracking @${synced.username} ${session ? "on your LeetAlly account" : "locally"}. Sign in to the same account on leetcode.com and refresh for exact sheet progress.`);
+      }
     }
     catch (cause) { setNotice(cause instanceof Error ? cause.message : "Could not sync LeetCode"); }
     finally { setSyncing(false); }
   }
 
-  async function syncFriend(friendName: string) {
-    const normalized = friendName.trim();
-    if (!normalized) return;
-    setSyncingFriend(normalized.toLowerCase()); setFriendNotice("");
+  async function unlinkLeetCode() {
+    if (!profile) return;
+    setSyncing(true); setNotice("");
     try {
-      const friend = await fetchLeetCodeFriend(normalized);
-      const friends = [...progress.friends.filter((item) => item.username.toLowerCase() !== friend.username.toLowerCase()), friend]
-        .sort((left, right) => right.totalSolved - left.totalSolved);
-      persist({ ...progress, friends });
-      setFriendUsername("");
-      setFriendNotice(`Updated @${friend.username}`);
+      const updated = session
+        ? await unlinkLeetCodeIdentity(session.user.id)
+        : removeLeetCodeIdentity(progress);
+      if (!session) await saveProgress(updated);
+      setProgress(updated);
+      setUsername("");
+      setNotice(session
+        ? "LeetCode ID unlinked. Your LeetAlly interviews and settings were kept."
+        : "LeetCode tracking removed from this device.");
     } catch (cause) {
-      setFriendNotice(cause instanceof Error ? cause.message : "Could not load that LeetCode profile");
+      setNotice(cause instanceof Error ? cause.message : "Could not unlink the LeetCode ID.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function requestFriend(friendAccountEmail: string) {
+    if (!session) {
+      setFriendNotice("Sign in to LeetAlly before adding friends.");
+      return;
+    }
+    const normalized = friendAccountEmail.trim().toLowerCase();
+    if (!normalized) return;
+    setSyncingFriend(normalized); setFriendNotice("");
+    try {
+      setFriendConnections(await addFriendByEmail(normalized));
+      setFriendEmail("");
+      setFriendNotice("If that email has a LeetAlly account, a request is now waiting for their approval.");
+    } catch (cause) {
+      setFriendNotice(cause instanceof Error ? cause.message : "Could not send that friend request.");
     } finally {
       setSyncingFriend("");
     }
   }
 
   async function refreshFriends() {
-    if (!progress.friends.length) return;
+    if (!session) return;
     setSyncingFriend("*"); setFriendNotice("");
-    const refreshed = await Promise.all(progress.friends.map(async (friend) => {
-      try { return await fetchLeetCodeFriend(friend.username); }
-      catch { return friend; }
-    }));
-    persist({ ...progress, friends: refreshed.sort((left, right) => right.totalSolved - left.totalSolved) });
-    setFriendNotice("Friend stats refreshed");
-    setSyncingFriend("");
+    try {
+      setFriendConnections(await listFriendConnections());
+      setFriendNotice("Friend connections refreshed.");
+    } catch (cause) {
+      setFriendNotice(cause instanceof Error ? cause.message : "Could not refresh friends.");
+    } finally { setSyncingFriend(""); }
   }
 
-  function removeFriend(friendName: string) {
-    persist({ ...progress, friends: progress.friends.filter((friend) => friend.username.toLowerCase() !== friendName.toLowerCase()) });
+  async function acceptFriend(connection: AccountFriendConnection) {
+    setSyncingFriend(connection.relationship_id); setFriendNotice("");
+    try {
+      setFriendConnections(await acceptFriendRequest(connection.relationship_id));
+      setFriendNotice(`${connection.email} is now connected.`);
+    } catch (cause) {
+      setFriendNotice(cause instanceof Error ? cause.message : "Could not accept the request.");
+    } finally { setSyncingFriend(""); }
+  }
+
+  async function removeFriend(connection: AccountFriendConnection) {
+    if (!session) return;
+    setSyncingFriend(connection.relationship_id); setFriendNotice("");
+    try {
+      await removeFriendConnection(connection.relationship_id);
+      setFriendConnections((current) => current.filter((item) => item.relationship_id !== connection.relationship_id));
+      setFriendNotice(connection.status === "accepted" ? "Friend removed." : "Friend request removed.");
+    } catch (cause) {
+      setFriendNotice(cause instanceof Error ? cause.message : "Could not remove the connection.");
+    } finally { setSyncingFriend(""); }
   }
 
   async function refreshCompanies() {
@@ -286,7 +352,7 @@ export default function App() {
   async function resetPassword() {
     if (!authEmail.trim()) { setAuthNotice("Enter your email address first."); return; }
     setAuthBusy(true); setAuthNotice("");
-    try { await sendPasswordReset(authEmail); setAuthNotice("Password reset email sent."); }
+    try { await sendPasswordReset(authEmail); setAuthNotice("If an account exists for that email, a password reset link has been sent."); }
     catch (cause) { setAuthNotice(cause instanceof Error ? cause.message : "Could not send reset email."); }
     finally { setAuthBusy(false); }
   }
@@ -299,31 +365,19 @@ export default function App() {
 
   if (!authChecked) return <main className="popup auth-gate"><div className="auth-gate-loading"><img src="/icon/96.png" alt="" /><strong>Connecting LeetAlly…</strong></div></main>;
 
-  if (!session) return <main className="popup auth-gate">
-    <header className="auth-gate-brand"><img src="/icon/96.png" alt="" /><div><strong>LeetAlly</strong><span>Your interview preparation account</span></div></header>
-    <section className="auth-gate-card">
-      <span className="eyebrow">ACCOUNT REQUIRED</span>
-      <h2>Log in to see your stats.</h2>
-      <p>Your progress, interview history and plan appear after you connect your LeetAlly account.</p>
-      <button className="website-auth" disabled={authBusy} onClick={() => void authenticateFromWebsite()}>Continue from LeetAlly website</button>
-      <button className="google-auth gate-google" disabled={authBusy} onClick={() => void authenticateWithGoogle()}><img src="/google.svg" alt="" />Continue with Google</button>
-      <div className="auth-divider"><span>or use email</span></div>
-      <input className="auth-input" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email address" />
-      <input className="auth-input" type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (8+ characters)" onKeyDown={(event) => { if (event.key === "Enter") void authenticateWithEmail(); }} />
-      <button className="email-auth" disabled={authBusy || !authEmail.trim() || authPassword.length < 8} onClick={() => void authenticateWithEmail()}>{authBusy ? "Please wait…" : authMode === "signin" ? "Sign in with email" : "Create email account"}</button>
-      <div className="auth-links"><button onClick={() => { setAuthMode((mode) => mode === "signin" ? "signup" : "signin"); setAuthNotice(""); }}>{authMode === "signin" ? "Create account" : "Already have an account?"}</button>{authMode === "signin" && <button onClick={() => void resetPassword()}>Forgot password?</button>}</div>
-      <small className="auth-gate-legal">By continuing, you agree to the <a href={TERMS_URL} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy Policy</a>.</small>
-      {authNotice && <p className="notice">{authNotice}</p>}
-    </section>
-  </main>;
-
   return <main className="popup">
     <header className="app-header">
-      <div className="brand"><img className="brand-logo" src="/icon/48.png" alt="" width="30" height="30" /><h1>LeetAlly</h1></div>
+      <div className="brand"><img className="brand-logo" src="/icon/48.png" alt="" width="30" height="30" /><h1>LeetAlly</h1><span className="beta-badge">BETA</span></div>
       {profile?.avatar ? <img className="profile-image" src={profile.avatar} alt="" /> : <button className="sync-small" onClick={() => setView("settings")}>Connect</button>}
     </header>
 
     {view === "overview" && <>
+      {!profile && <section className="guest-track-card">
+        <div><span>START WITHOUT AN ACCOUNT</span><strong>Track your LeetCode progress</strong><small>Enter a public username. Your stats stay on this device until you sign in.</small></div>
+        <div className="guest-track-form"><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="LeetCode username" onKeyDown={(event) => { if (event.key === "Enter") void sync(username); }} /><button onClick={() => void sync(username)} disabled={syncing || !username.trim()}>{syncing ? "Loading…" : "Track"}</button></div>
+        {notice && <p>{notice}</p>}
+      </section>}
+      {profile && !session && <section className="guest-upgrade"><div><strong>Saved on this device</strong><span>Sign in to back up progress, use Friends and keep interview history.</span></div><button onClick={() => setView("settings")}>Sign in</button></section>}
       <section className="hero">
         <div><span className="eyebrow">ONE VOICE · TODAY'S PLAN</span><h2>{todayCount >= progress.planner.dailyProblemGoal ? "Daily goal complete." : "One focused interview moves you forward."}</h2><p>{profile ? `@${profile.username} · Rank ${profile.ranking?.toLocaleString() ?? "—"}` : "Connect LeetCode to combine interview practice with company-focused progress."}</p></div>
         <div className="goal-ring" style={{ "--goal": `${dailyPercent * 3.6}deg` } as React.CSSProperties}><strong>{dailyPercent}%</strong><span>daily</span></div>
@@ -334,12 +388,12 @@ export default function App() {
       <section className="difficulty-row"><div className="easy"><b>{difficultyCounts.easy}</b><span>Easy</span></div><div className="medium"><b>{difficultyCounts.medium}</b><span>Medium</span></div><div className="hard"><b>{difficultyCounts.hard}</b><span>Hard</span></div></section>
 
       <section className="panel activity-panel">
-        <header><h3>30-Day Activity</h3><div className="activity-legend"><b>{activeDays}/30</b><span>Less</span><i className="level-0" /><i className="level-1" /><i className="level-2" /><i className="level-3" /><span>More</span></div></header>
-        <div className="heatmap">{days.map(({ key }) => { const count = progress.activity[key] ?? 0; const dailyDone = Boolean(profile?.dailyChallengeActivity?.[key]); return <i key={key} title={`${key}: ${count} submission${count === 1 ? "" : "s"}${dailyDone ? " · daily challenge completed" : ""}`} className={`level-${Math.min(3, count)} ${dailyDone ? "daily-done" : ""} ${key === localDateKey() ? "today" : ""}`} />; })}</div>
-        <div className="activity-dates"><span>{firstActivityDate}</span><span>Today</span></div>
+        <header><h3>{activityMonth} Activity</h3><div className="activity-legend"><b>{activeDays}/{days.length}</b><span>Less</span><i className="level-0" /><i className="level-1" /><i className="level-2" /><i className="level-3" /><span>More</span></div></header>
+        <div className="heatmap" style={{ gridTemplateColumns: `repeat(${Math.ceil(days.length / 2)}, minmax(0, 1fr))` }}>{days.map(({ key, date }) => { const count = progress.activity[key] ?? 0; const dailyDone = Boolean(profile?.dailyChallengeActivity?.[key]); const label = `${date.toLocaleDateString()}: ${count} submission${count === 1 ? "" : "s"}${dailyDone ? " · daily challenge completed" : ""}`; return <i key={key} title={label} aria-label={label} aria-current={key === localDateKey() ? "date" : undefined} className={`level-${Math.min(3, count)} ${dailyDone ? "daily-done" : ""} ${key === localDateKey() ? "today" : ""}`} />; })}</div>
+        <div className="activity-dates"><span>{firstActivityDate}</span><span>{lastActivityDate}</span></div>
       </section>
 
-      <section className="panel focus-panel"><header><h3>Focus sheets</h3><button onClick={() => setView("settings")}>Manage</button></header>{selectedSheets.length ? selectedSheets.map((sheet) => { const percent = sheet.total > 0 ? Math.round(sheet.completed / sheet.total * 100) : 0; return <div className="focus-row" key={sheet.id}><div><strong><i className="sheet-dot" style={{ background: sheet.color }} />{sheet.name}</strong><span>{sheet.completed}/{sheet.total} <b style={{ color: sheet.color }}>{percent}%</b></span></div><div className="focus-track"><i style={{ width: `${percent}%`, background: sheet.color }} /></div></div>; }) : <p className="empty">Choose your first DSA sheet in Settings.</p>}</section>
+      <section className="panel focus-panel"><header><h3>Focus sheets</h3><button onClick={() => setView("settings")}>Manage</button></header>{profile && !profile.verifiedOwner ? <p className="empty">Sign in to @{profile.username} on leetcode.com, then Refresh for exact sheet completion.</p> : selectedSheets.length ? selectedSheets.map((sheet) => { const percent = sheet.total > 0 ? Math.round(sheet.completed / sheet.total * 100) : 0; return <div className="focus-row" key={sheet.id}><div><strong><i className="sheet-dot" style={{ background: sheet.color }} />{sheet.name}</strong><span>{sheet.completed}/{sheet.total} <b style={{ color: sheet.color }}>{percent}%</b></span></div><div className="focus-track"><i style={{ width: `${percent}%`, background: sheet.color }} /></div></div>; }) : <p className="empty">Choose your first DSA sheet in Settings.</p>}</section>
 
       <section className="next-card"><div><span>NEXT ACTION</span><strong>{currentProblem?.title || "Open a LeetCode problem"}</strong><small>{currentProblem ? "Explain your approach aloud before coding." : "Your planner activates on a problem page."}</small></div>{currentProblem && <a href={currentProblem.url} target="_blank">Continue →</a>}</section>
     </>}
@@ -389,17 +443,19 @@ export default function App() {
     </>}
 
     {view === "friends" && <>
-      <div className="page-title"><span>FRIEND TRACKER</span><h2>Compare your progress</h2><p>Track public LeetCode totals by difficulty.</p></div>
+      <div className="page-title"><span>FRIEND TRACKER</span><h2>Compare with people you know</h2><p>Add their LeetAlly account email. Stats stay private until they accept.</p></div>
+      {!session ? <section className="empty-friends"><strong>Sign in to manage friends</strong><p>Your friend list belongs to your LeetAlly email account and syncs across devices.</p></section> : <>
       <section className="panel friend-add">
-        <div className="username-connect"><input value={friendUsername} onChange={(event) => setFriendUsername(event.target.value)} placeholder="Friend's LeetCode username" onKeyDown={(event) => { if (event.key === "Enter") void syncFriend(friendUsername); }} /><button onClick={() => void syncFriend(friendUsername)} disabled={Boolean(syncingFriend) || !friendUsername.trim()}>{syncingFriend && syncingFriend !== "*" ? "Adding…" : "Add"}</button></div>
+        <div className="username-connect"><input type="email" autoComplete="email" value={friendEmail} onChange={(event) => setFriendEmail(event.target.value)} placeholder="Friend's LeetAlly email" aria-label="Friend's LeetAlly email" onKeyDown={(event) => { if (event.key === "Enter") void requestFriend(friendEmail); }} /><button onClick={() => void requestFriend(friendEmail)} disabled={Boolean(syncingFriend) || !friendEmail.trim()}>{syncingFriend && syncingFriend !== "*" ? "Sending…" : "Add"}</button></div>
         {friendNotice && <p className="notice">{friendNotice}</p>}
       </section>
-      <div className="friends-heading"><strong>{progress.friends.length} tracked</strong><button onClick={() => void refreshFriends()} disabled={Boolean(syncingFriend) || !progress.friends.length}>{syncingFriend === "*" ? "Refreshing…" : "Refresh all"}</button></div>
-      {progress.friends.length ? progress.friends.map((friend) => <section className="friend-card" key={friend.username}>
-        <header>{friend.avatar ? <img src={friend.avatar} alt="" /> : <span className="friend-avatar">{friend.username[0]?.toUpperCase()}</span>}<div><strong>@{friend.username}</strong><small>Rank {friend.ranking?.toLocaleString() ?? "—"}</small></div><b>{friend.totalSolved}<small>Solved</small></b></header>
-        <div className="friend-difficulties"><span className="easy"><b>{friend.easySolved}</b> Easy</span><span className="medium"><b>{friend.mediumSolved}</b> Medium</span><span className="hard"><b>{friend.hardSolved}</b> Hard</span></div>
-        <footer><small>Updated {new Date(friend.syncedAt).toLocaleDateString()}</small><div><button onClick={() => void syncFriend(friend.username)} disabled={Boolean(syncingFriend)}>Refresh</button><button className="remove" onClick={() => removeFriend(friend.username)}>Remove</button></div></footer>
-      </section>) : <section className="empty-friends"><strong>No friends tracked yet</strong><p>Add a LeetCode username to compare solved totals.</p></section>}
+      <div className="friends-heading"><strong>{friendConnections.filter((item) => item.status === "accepted").length} connected</strong><button onClick={() => void refreshFriends()} disabled={Boolean(syncingFriend)}>{syncingFriend === "*" ? "Refreshing…" : "Refresh"}</button></div>
+      {friendConnections.length ? friendConnections.map((friend) => <section className={`friend-card ${friend.status === "pending" ? "pending" : ""}`} key={friend.relationship_id}>
+        <header>{friend.avatar ? <img src={friend.avatar} alt="" /> : <span className="friend-avatar">{(friend.display_name || friend.email)[0]?.toUpperCase()}</span>}<div><strong>{friend.display_name || friend.email}</strong><small>{friend.status === "accepted" ? (friend.username ? `@${friend.username} · Rank ${friend.ranking?.toLocaleString() ?? "—"}` : "No LeetCode ID linked yet") : friend.direction === "received" ? `${friend.email} wants to connect` : `Waiting for ${friend.email}`}</small></div>{friend.status === "accepted" && <b>{friend.total_solved}<small>Solved</small></b>}</header>
+        {friend.status === "accepted" && <div className="friend-difficulties"><span className="easy"><b>{friend.easy_solved}</b> Easy</span><span className="medium"><b>{friend.medium_solved}</b> Medium</span><span className="hard"><b>{friend.hard_solved}</b> Hard</span></div>}
+        <footer><small>{friend.status === "accepted" ? (friend.synced_at ? `Updated ${new Date(friend.synced_at).toLocaleDateString()}` : "Waiting for their first LeetCode sync") : friend.direction === "received" ? "Approval required" : "Request pending"}</small><div>{friend.direction === "received" && <button onClick={() => void acceptFriend(friend)} disabled={Boolean(syncingFriend)}>Accept</button>}<button className="remove" onClick={() => void removeFriend(friend)} disabled={Boolean(syncingFriend)}>{friend.status === "accepted" ? "Remove" : friend.direction === "received" ? "Decline" : "Cancel"}</button></div></footer>
+      </section>) : <section className="empty-friends"><strong>No friend connections yet</strong><p>Add the email they use for LeetAlly. They choose whether to share progress.</p></section>}
+      </>}
     </>}
 
     {view === "companies" && (() => {
@@ -437,18 +493,26 @@ export default function App() {
     })()}
 
     {view === "settings" && <>
-      <div className="page-title"><span>PERSONALIZE</span><h2>Choose your path</h2><p>Only selected sheets appear on your dashboard.</p></div>
+      <div className="page-title"><span>PERSONALIZE</span><h2>Choose your path</h2><p>All sheets sync from LeetCode; selected sheets appear on your dashboard.</p></div>
       <section className="panel auth-panel">
         {session ? <>
-          <header><div><h3>LeetAlly account</h3><span>Progress and premium identity</span></div><i className={`account-status ${entitlement?.status === "active" ? "premium" : ""}`}>{entitlement?.status === "active" ? "Premium" : "Free"}</i></header>
+          <header><div><h3>LeetAlly account</h3><span>Progress and interview access</span></div><i className={`account-status ${entitlement?.status === "active" ? "premium" : ""}`}>{entitlement?.status === "active" ? "Beta" : "Free"}</i></header>
           <div className="signed-account"><span>{(session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture) ? <img src={session.user.user_metadata.avatar_url || session.user.user_metadata.picture} alt="" /> : (session.user.email?.[0] ?? "L").toUpperCase()}</span><div><strong>{session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email}</strong><small>{session.user.email}</small></div></div>
-          <p className="cloud-note">Cloud progress sync is active. {entitlement?.status === "active" ? `${entitlement.minutes_remaining}/${entitlement.minutes_limit} speaking minutes remaining. Silence is never counted.` : "Free launch access is active. Paid plans are currently unavailable."}</p>
-          <button className="signout-button" onClick={() => void supabase.auth.signOut()}>Sign out</button>
+          <p className="cloud-note">Cloud progress sync is active. {entitlement?.status === "active" ? `${entitlement.minutes_remaining}/${entitlement.minutes_limit} speaking minutes remaining. Silence is never counted.` : "Free tracking, sheets and friends access is active. One AI interview trial is included."}</p>
+          {entitlement?.status === "active" && <div className="billing-usage"><div><span>Monthly interview usage</span><b>{entitlement.usage_percent ?? 0}%</b></div><i><b style={{ transform: `scaleX(${(entitlement.usage_percent ?? 0) / 100})` }} /></i><small>{entitlement.period_end ? `Current access through ${new Date(entitlement.period_end).toLocaleDateString()}` : "Beta Monthly active"}</small></div>}
+          <a className="manage-plan" href="https://leetally-web.vercel.app/pricing" target="_blank" rel="noreferrer">{entitlement?.status === "active" ? "Manage Beta Monthly ↗" : "See Beta Monthly ↗"}</a>
+          <button className="signout-button" disabled={authBusy} onClick={() => {
+            setAuthBusy(true); setAuthNotice("");
+            void signOutOfExtension()
+              .then(() => clearLocalAccountProgress())
+              .catch((cause) => setAuthNotice(cause instanceof Error ? cause.message : "Sign out failed."))
+              .finally(() => setAuthBusy(false));
+          }}>{authBusy ? "Signing out…" : "Sign out"}</button>
         </> : <>
           <header><div><h3>{authMode === "signin" ? "Sign in" : "Create account"}</h3><span>Keep progress and interview history across devices</span></div></header>
           <div className="data-disclosure"><strong>Before you continue</strong><p>LeetAlly reads the current LeetCode problem, editor code and visible output. During an interview, detected speech segments—not silence—are sent to transcription and AI voice providers. This data is used only for interview practice, feedback and account sync.</p></div>
           <label className="policy-consent"><input type="checkbox" checked={policiesAccepted} onChange={(event) => setPoliciesAccepted(event.target.checked)} /><span>I agree to the <a href={TERMS_URL} target="_blank" rel="noreferrer">Terms</a> and acknowledge the <a href={PRIVACY_URL} target="_blank" rel="noreferrer">Privacy Policy</a> (version {POLICY_VERSION}).</span></label>
-          <button className="google-auth" disabled={authBusy || !policiesAccepted} onClick={() => void authenticateWithGoogle()}><b>G</b>Continue with Google</button>
+          <button className="google-auth" disabled={authBusy || !policiesAccepted} onClick={() => void authenticateWithGoogle()}><img src="/google.svg" alt="" aria-hidden="true" />Continue with Google</button>
           <div className="auth-divider"><span>or use email</span></div>
           <input className="auth-input" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} placeholder="Email address" />
           <input className="auth-input" type="password" minLength={8} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password (8+ characters)" onKeyDown={(event) => { if (event.key === "Enter") void authenticateWithEmail(); }} />
@@ -458,18 +522,19 @@ export default function App() {
         </>}
       </section>
       <section className="panel account-panel">
-        <header><div><h3>{profile ? `@${profile.username}` : "LeetCode account"}</h3><span>{profile ? `Synced ${new Date(profile.syncedAt).toLocaleString()}` : "Enter any public LeetCode username"}</span></div></header>
-        <div className="username-connect"><input value={username} onChange={(event) => setUsername(event.target.value)} placeholder="LeetCode username" onKeyDown={(event) => { if (event.key === "Enter") void sync(username); }} /><button onClick={() => void sync(username)} disabled={syncing || !username.trim()}>{syncing ? "Syncing…" : profile ? "Refresh" : "Connect"}</button></div>
+        <header><div><h3>{profile ? `@${profile.username}` : "LeetCode account"}</h3><span>{profile ? `${session ? `Connected to ${session.user.email}` : "Tracking locally on this device"} · synced ${new Date(profile.syncedAt).toLocaleString()}` : "Enter a public LeetCode username—no LeetAlly login required"}</span></div></header>
+        <div className="username-connect"><input value={profile?.username ?? username} onChange={(event) => setUsername(event.target.value)} placeholder="LeetCode username" disabled={syncing || Boolean(profile)} onKeyDown={(event) => { if (event.key === "Enter") void sync(username); }} /><button onClick={() => void sync(profile?.username ?? username)} disabled={syncing || (!profile && !username.trim())}>{syncing ? "Syncing…" : profile ? "Refresh" : "Track"}</button>{profile && <button className="unlink-account" onClick={() => void unlinkLeetCode()} disabled={syncing}>{session ? "Unlink" : "Remove"}</button>}</div>
+        {!session && <p className="notice">Basic profile tracking is local. Sign in above for cloud backup, friends and interview history.</p>}
         {notice && <p className="notice">{notice}</p>}
       </section>
       <details className="sync-guide">
         <summary>How automatic tracking works</summary>
-        <ol><li>Sign in at leetcode.com.</li><li>Enter that same LeetCode username above.</li><li>Press Refresh to import your full accepted history and activity.</li><li>Select any sheets below; percentages update from exact problem IDs.</li></ol>
-        <p>Public usernames show profile totals, but LeetCode only returns the complete accepted-problem list to the signed-in owner.</p>
+        <ol><li>Enter any public username for totals, streak and activity.</li><li>For exact sheet completion, sign in to that same account at leetcode.com and press Refresh.</li><li>Select sheets only to choose which ones appear on Overview.</li><li>Sign in to LeetAlly when you want cloud backup and detailed account features.</li></ol>
+        <p>Guest progress stays in extension storage and is attached to your LeetAlly account when you sign in later.</p>
       </details>
       <section className="panel sheet-picker"><header><h3>DSA sheets</h3><span>{selectedSheets.length} selected</span></header>{progress.sheets.map((sheet) => { const percent = sheet.total > 0 ? Math.round(sheet.completed / sheet.total * 100) : 0; return <label key={sheet.id}><input type="checkbox" checked={Boolean(sheet.selected)} onChange={(event) => void toggleSheet(sheet.id, event.target.checked)} /><span className="checkmark" style={{ "--sheet-color": sheet.color } as React.CSSProperties}>✓</span><div><strong>{sheet.name}</strong><small>{sheet.autoTracked ? `${sheet.completed}/${sheet.total} completed · ${percent}%` : `${sheet.total} problems · sync to auto-track`}</small></div><b className="sheet-percent" style={{ color: sheet.color }}>{percent}%</b><a href={sheet.url} target="_blank">↗</a></label>; })}</section>
     </>}
 
-    <nav><button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}><span>◫</span>Overview</button><button className={view === "interviews" ? "active" : ""} onClick={() => setView("interviews")}><span>◉</span>Interview</button><button className={view === "planner" ? "active" : ""} onClick={() => setView("planner")}><span>◇</span>Planner</button><button className={view === "companies" ? "active" : ""} onClick={() => setView("companies")}><span>▦</span>Companies</button><button className={view === "friends" ? "active" : ""} onClick={() => setView("friends")}><span>♙</span>Friends</button><button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><span>⚙</span>Settings</button></nav>
+    <nav><button className={view === "overview" ? "active" : ""} onClick={() => setView("overview")}><span>◫</span>Overview</button><button className={view === "interviews" ? "active" : ""} onClick={() => setView("interviews")}><span>◉</span>Interview</button>{/* Planner is intentionally hidden until the beta release. <button className={view === "planner" ? "active" : ""} onClick={() => setView("planner")}><span>◇</span>Planner</button> */}<button className={view === "companies" ? "active" : ""} onClick={() => setView("companies")}><span>▦</span>Companies</button><button className={view === "friends" ? "active" : ""} onClick={() => setView("friends")}><span>♙</span>Friends</button><button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><span>⚙</span>Settings</button></nav>
   </main>;
 }

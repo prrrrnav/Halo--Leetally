@@ -3,14 +3,17 @@
 ## Automated gate
 
 - [ ] Run `powershell -ExecutionPolicy Bypass -File scripts/release-check.ps1`.
-- [ ] Confirm backend tests, extension compile/build/ZIP and website build pass.
+- [ ] Confirm backend tests, extension auth tests, compile/build/ZIP and website
+  build pass.
 - [ ] Confirm the generated manifest contains only expected permissions/hosts.
 - [ ] Confirm the ZIP contains no development VAD bundle, source secrets or
   remotely executed code.
+- [ ] Confirm the automated gate finds 1-5 real extension screenshots at exactly
+  1280×800; marketing-site captures do not satisfy this check.
 
 ## Supabase and backend
 
-- [ ] Apply migrations `0001` through `0008` to the production Supabase project.
+- [ ] Apply migrations `0001` through `0014` to the production Supabase project.
 - [ ] Set `APP_ENV=production` in Vercel.
 - [ ] Configure the server-only Supabase service-role key and provider keys.
 - [ ] Set production `CORS_ORIGINS` to `https://leetally-web.vercel.app` and
@@ -20,8 +23,9 @@
 - [ ] Verify create → audio turn → context update → completion survives cold starts.
 - [ ] Verify account export and deletion with a non-production test user.
 - [ ] Configure log redaction and provider retention settings.
-- [x] Keep billing and website checkout disabled for the initial public release.
-- [ ] Before any future paid launch, finish Cashfree production KYC, webhook,
+- [ ] Enable billing only after the complete Cashfree sandbox acceptance test in
+  `docs/BILLING_LAUNCH.md` passes.
+- [ ] Before the paid beta launch, finish Cashfree production KYC, webhook,
   refund, cancellation, invoice, tax and physical-address configuration.
 
 ## Extension
@@ -31,6 +35,8 @@
 - [ ] Confirm no editor/page data is read until disclosure acceptance.
 - [ ] Test microphone allow, deny, revoke, silence, short speech and device loss.
 - [ ] Test email login, Google login, token refresh, logout and password reset.
+- [ ] Test friend request, acceptance, unlink/relink of LeetCode ID and removal
+  with two separate LeetAlly accounts; confirm pending requests reveal no stats.
 - [ ] Test all interview types, end-session flow and scorecard persistence.
 - [ ] Test on signed-in and signed-out LeetCode sessions and current Chrome stable.
 - [ ] Test 100%, 125% and 150% browser zoom and light/dark LeetCode themes.

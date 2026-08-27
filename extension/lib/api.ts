@@ -25,11 +25,6 @@ export interface Interview {
   created_at: string;
 }
 
-export interface SpeechSynthesisResponse {
-  audio_base64: string;
-  audio_content_type: string;
-}
-
 export interface InterviewTurnResponse {
   transcript: string;
   interviewer_message: string;
@@ -66,12 +61,36 @@ export interface InterviewAssessment {
 
 export interface BillingEntitlement {
   plan_id?: string | null;
+  plan_name?: string | null;
   status: string;
   is_lifetime: boolean;
   minutes_limit: number;
   minutes_used: number;
   minutes_remaining: number;
   speech_seconds_used?: number;
+  speech_seconds_remaining?: number;
+  usage_percent?: number;
+  auto_renew?: boolean;
+  period_start?: string | null;
+  period_end?: string | null;
+  features?: string[];
+}
+
+export interface AccountFriendConnection {
+  relationship_id: string;
+  account_user_id: string;
+  email: string;
+  display_name?: string | null;
+  status: "pending" | "accepted";
+  direction: "sent" | "received" | "connected";
+  username?: string | null;
+  avatar?: string | null;
+  ranking?: number | null;
+  total_solved: number;
+  easy_solved: number;
+  medium_solved: number;
+  hard_solved: number;
+  synced_at?: string | null;
 }
 
 async function getAccessToken(): Promise<string> {
@@ -106,6 +125,42 @@ async function authenticatedFetch(
     credentials: "omit",
     headers,
   });
+}
+
+async function friendResponse(response: Response): Promise<AccountFriendConnection[]> {
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? `Friend request failed (${response.status}).`);
+  }
+  return response.json();
+}
+
+export async function listFriendConnections(): Promise<AccountFriendConnection[]> {
+  return friendResponse(await authenticatedFetch(`${API_URL}/friends`));
+}
+
+export async function addFriendByEmail(email: string): Promise<AccountFriendConnection[]> {
+  return friendResponse(await authenticatedFetch(`${API_URL}/friends`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: email.trim().toLowerCase() }),
+  }));
+}
+
+export async function acceptFriendRequest(relationshipId: string): Promise<AccountFriendConnection[]> {
+  return friendResponse(await authenticatedFetch(`${API_URL}/friends/${relationshipId}/accept`, {
+    method: "POST",
+  }));
+}
+
+export async function removeFriendConnection(relationshipId: string): Promise<void> {
+  const response = await authenticatedFetch(`${API_URL}/friends/${relationshipId}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? `Could not remove friend (${response.status}).`);
+  }
 }
 
 export async function createInterview(
@@ -168,38 +223,6 @@ export async function submitInterviewAudio(
     throw new Error(
       body?.detail ??
         `Backend request failed with status ${response.status}`,
-    );
-  }
-
-  return response.json();
-}
-
-export async function synthesizeSpeech(
-  text: string,
-  companyId: TargetCompanyId = "google",
-): Promise<SpeechSynthesisResponse> {
-  const response = await authenticatedFetch(
-    `${API_URL}/speech`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text,
-        company_id: companyId,
-      }),
-    },
-  );
-
-  if (!response.ok) {
-    const body = await response
-      .json()
-      .catch(() => null);
-
-    throw new Error(
-      body?.detail ??
-        `Fish Audio request failed with status ${response.status}`,
     );
   }
 

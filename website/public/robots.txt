@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://leetally-web.vercel.app/sitemap.xml

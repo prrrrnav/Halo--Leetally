@@ -6,7 +6,7 @@ import {
 import { FaAmazon, FaMicrosoft } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import {
-  cancelRenewal, createCheckout, deleteAccount, exportAccountData, getBillingPlans, getEntitlement, openCashfreeCheckout,
+  cancelRenewal, createCheckout, deleteAccount, exportAccountData, getBillingPlans, getEntitlement, getFriendConnections, openCashfreeCheckout,
   type BillingEntitlement, type BillingPlan,
 } from "./billing";
 import type { PrepRoute } from "./PrepWorkspace";
@@ -30,10 +30,26 @@ const routeTitles: Record<Route, string> = {
   "/dsa-patterns": "20 DSA Patterns — LeetAlly",
   "/sql-sheet": "SQL Sheet — LeetAlly",
 };
+const routeDescriptions: Record<Route, string> = {
+  "/": "Company-specific LeetCode question tracking, realistic AI interviews, and friends progress in one Chrome extension.",
+  "/features": "Explore LeetAlly company question tracking, LeetCode interview practice, scorecards, and friends progress.",
+  "/pricing": "Compare free LeetCode tracking with LeetAlly Beta Monthly interview access.",
+  "/feedback": "Share product feedback with the LeetAlly team.",
+  "/contact": "Contact LeetAlly for account, billing, accessibility, security, or product support.",
+  "/login": "Sign in to manage LeetAlly cloud progress, interview history, and account settings.",
+  "/signup": "Create a LeetAlly account to sync LeetCode preparation progress.",
+  "/extension-auth": "Securely connect the LeetAlly Chrome extension to your account.",
+  "/privacy": "Read how LeetAlly collects, uses, protects, exports, and deletes user data.",
+  "/terms": "Read the LeetAlly service, interview, subscription, and cancellation terms.",
+  "/preparation": "Open the LeetAlly preparation dashboard for focused interview practice.",
+  "/company-dsa": "Practice company-specific LeetCode questions with difficulty filters and progress tracking.",
+  "/dsa-patterns": "Build reusable problem-solving skill across twenty structured DSA patterns.",
+  "/sql-sheet": "Practice interview SQL through joins, aggregations, subqueries, CTEs, and window functions.",
+};
 const configuredExtensionUrl = import.meta.env.VITE_EXTENSION_URL as string | undefined;
 const extensionUrl = configuredExtensionUrl && !configuredExtensionUrl.includes("YOUR_EXTENSION_ID")
   ? configuredExtensionUrl
-  : "https://chromewebstore.google.com/";
+  : "https://chromewebstore.google.com/detail/kbmamkkghfaagfplfdgpdocmgakhjmlo";
 const trustedExtensionId = (import.meta.env.VITE_EXTENSION_ID as string | undefined) || "kbmamkkghfaagfplfdgpdocmgakhjmlo";
 const supportEmail = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) || "watershaper9.1@gmail.com";
 const billingEnabled = import.meta.env.VITE_BILLING_ENABLED === "true";
@@ -123,7 +139,7 @@ function FlipWords({ words }: { words: string[] }) {
     return () => window.clearInterval(timer);
   }, [words.length]);
 
-  return <span className="flip-words" aria-label={words[active]} aria-live="polite" aria-atomic="true">
+  return <span className="flip-words" role="status" aria-label={words[active]} aria-live="polite" aria-atomic="true">
     <span key={words[active]} aria-hidden="true">{words[active]}</span>
   </span>;
 }
@@ -303,28 +319,27 @@ function PreparationShowcase({ go }: { go: (path: Route) => void }) {
 const features = [
   ["01", "AI interviewer on LeetCode", "Open a supported LeetCode problem and start a realistic voice interview without leaving the page where you already practise."],
   ["02", "Company-focused questions", "Choose a target company, work through focused question sets and track the problems most relevant to your preparation."],
-  ["03", "One interviewer, every round", "Use the same voice interviewer for DSA, LLD, HLD and behavioural practice so your preparation feels connected."],
-  ["04", "Code-aware follow-ups", "LeetAlly sees the current problem, language, code revisions and visible output so each follow-up stays grounded."],
-  ["05", "Evidence-backed scorecards", "See the reasoning, communication and technical evidence behind every score, plus the next drill to practise."],
-  ["06", "Silence costs nothing", "Voice detection runs locally. Only recognized speaking segments reach paid providers or count toward usage."],
+  ["03", "Friends progress", "Add friends by account email and compare public LeetCode progress without exposing private account or interview data."],
+  ["04", "One interviewer, every round", "Use the same voice interviewer for DSA, LLD, HLD and behavioural practice so your preparation feels connected."],
+  ["05", "Code-aware scorecards", "LeetAlly uses the current problem, code revisions and visible output to produce evidence-backed feedback and next drills."],
+  ["06", "Silence costs nothing", "Voice detection runs locally. Only recognized speaking segments reach interview providers or count toward usage."],
 ];
 
 function Home({ go }: { go: (path: Route) => void }) {
-  return <div className="landing-page"><div className="landing-scroll-progress" aria-hidden="true" /><OrbitalHero go={go} /><section className="marquee"><span>LEETCODE INTERVIEWS</span><i /> <span>COMPANY QUESTION SETS</span><i /> <span>ONE VOICE COACH</span><i /></section><PreparationShowcase go={go} /><EarlyAccessTestimonials /><section className="home-grid"><div><span className="kicker">TWO FOCUSED MODES</span><h2>Practise the problem. Prepare for the company.</h2></div><p>LeetAlly combines realistic interviews on the LeetCode problem in front of you with focused question sets for the companies you want to join.</p></section><section className="pillar-grid"><article><span>01 / PRIMARY</span><h3>LeetCode AI Interviewer</h3><p>One voice interviewer reads the active problem and your evolving code, asks follow-ups, challenges assumptions and scores the evidence from your round.</p><a href={extensionUrl}>Start an interview ↗</a></article><article><span>02 / PRIMARY</span><h3>Company-based Questions</h3><p>Choose your target, filter by difficulty and practise focused DSA questions with progress tracking before turning them into interview rounds.</p><button onClick={() => go("/preparation")}>Open prep sheets ↗</button><small>Independent preparation sets. No company affiliation or endorsement.</small></article></section><section className="phase-strip">{["LeetCode", "Company sets", "DSA", "LLD", "HLD", "Behavioural"].map((item, index) => <div key={item}><b>0{index + 1}</b><span>{item}</span></div>)}</section><section className="cta"><span>ONE INTERVIEWER. YOUR WHOLE PREP LOOP.</span><h2>Go from solving company-focused questions to explaining them under real interview pressure.</h2><a href={extensionUrl}>Start on LeetCode <b>↗</b></a></section></div>;
+  return <div className="landing-page"><div className="landing-scroll-progress" aria-hidden="true" /><OrbitalHero go={go} /><section className="marquee"><span>LEETCODE INTERVIEWS</span><i /> <span>COMPANY QUESTION SETS</span><i /> <span>FRIENDS PROGRESS</span><i /></section><PreparationShowcase go={go} /><EarlyAccessTestimonials /><section className="home-grid"><div><span className="kicker">THREE CONNECTED MOATS</span><h2>Practise the problem. Prepare for the company. Progress together.</h2></div><p>LeetAlly combines realistic interviews on the active LeetCode problem, focused company question sets, and email-connected friends progress.</p></section><section className="pillar-grid"><article><span>01 / PRIMARY</span><h3>LeetCode AI Interviewer</h3><p>One voice interviewer reads the active problem and your evolving code, asks follow-ups, challenges assumptions and scores the evidence from your round.</p><a href={extensionUrl}>Start an interview ↗</a></article><article><span>02 / PRIMARY</span><h3>Company-based Questions</h3><p>Choose your target, filter by difficulty and practise focused DSA questions with progress tracking before turning them into interview rounds.</p><button onClick={() => go("/preparation")}>Open prep sheets ↗</button><small>Independent preparation sets. No company affiliation or endorsement.</small></article><article><span>03 / PRIMARY</span><h3>Friends Progress Tracking</h3><p>Add a friend using their LeetAlly account email. Their connection stays account-based even if either person links, unlinks, or changes a public LeetCode username.</p><button onClick={() => go("/signup")}>Connect your account ↗</button><small>Only public coding progress is shared; private account and interview data stays private.</small></article></section><section className="phase-strip">{["LeetCode", "Company sets", "Friends", "DSA", "System design", "Behavioural"].map((item, index) => <div key={item}><b>0{index + 1}</b><span>{item}</span></div>)}</section><section className="cta"><span>ONE CONNECTED PREPARATION LOOP.</span><h2>Solve company-focused questions, explain them under pressure, and stay accountable with friends.</h2><a href={extensionUrl}>Start on LeetCode <b>↗</b></a></section></div>;
 }
 
 function Features() { return <><PageIntro index="01" label="FEATURES" title="LeetCode interviews meet company-focused prep." copy="One voice interviewer connects DSA, LLD, HLD and behavioural preparation." /><section className="feature-grid">{features.map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}</section><section className="architecture"><div><span>CHOOSE</span><b>Company + question</b></div><i>→</i><div><span>INTERVIEW</span><b>Explain + build</b></div><i>→</i><div><span>IMPROVE</span><b>Evidence + next drill</b></div></section></>; }
 
 const fallbackPlans: BillingPlan[] = [
-  { id: "sde1_sprint", name: "SDE-1 Sprint", purchase_type: "one_time", amount_inr: 799, currency: "INR", interview_minutes_per_month: 240, interval: "month", supports_auto_renew: true, period_days: 30 },
-  { id: "sde1_intensive", name: "SDE-1 Intensive", purchase_type: "one_time", amount_inr: 1199, currency: "INR", interview_minutes_per_month: 600, interval: "month", supports_auto_renew: true, period_days: 30 },
+  { id: "beta_monthly", name: "LeetAlly Beta Monthly", purchase_type: "subscription", amount_inr: 799, currency: "INR", interview_minutes_per_month: 240, interval: "month", supports_auto_renew: true, period_days: 30, features: ["company_specific_interviews", "dsa_lld_hld_behavioral", "interview_scorecards", "interview_history", "monthly_usage_dashboard"] },
 ];
 
 function Pricing({ go, session }: { go: (path: Route) => void; session: Session | null }) {
   const [plans, setPlans] = useState<BillingPlan[]>(fallbackPlans);
   const [entitlement, setEntitlement] = useState<BillingEntitlement | null>(null);
   const [selected, setSelected] = useState<BillingPlan | null>(null);
-  const [details, setDetails] = useState({ customer_name: "", phone: "", auto_renew: false, accepted: false });
+  const [details, setDetails] = useState({ customer_name: "", phone: "", accepted: false });
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -367,7 +382,6 @@ function Pricing({ go, session }: { go: (path: Route) => void; session: Session 
         plan_id: selected.id,
         customer_name: details.customer_name,
         phone: details.phone,
-        auto_renew: details.auto_renew,
       });
       await openCashfreeCheckout(checkout);
     } catch (error) {
@@ -387,26 +401,26 @@ function Pricing({ go, session }: { go: (path: Route) => void; session: Session 
   };
   const active = entitlement?.status === "active";
   return <>
-    <PageIntro index="02" label="PRICING" title={billingEnabled ? "Pay for practice. Never for silence." : "Start with a free interview."} copy={billingEnabled ? "Choose a 30-day pass or explicitly enable monthly AutoPay. Access starts only after Cashfree confirms payment to our server." : "Payments and paid plans are disabled for the initial public release. No payment information will be requested."} />
+    <PageIntro index="02" label="BETA PRICING" title={billingEnabled ? "Track for free. Interview deeply with Beta Monthly." : "Start with tracking and a free interview."} copy={billingEnabled ? "A focused monthly beta for company-specific LeetCode interviews. Access starts only after Cashfree confirms payment to our server." : "Payments are not configured in this build. Tracking remains available without a paid plan."} />
     {!billingEnabled && <p className="billing-notice">Launch access includes one free AI interview trial. Paid plans and checkout are currently unavailable.</p>}
     {billingEnabled && entitlement && entitlement.status !== "none" && <section className={`billing-status ${active ? "active" : "attention"}`}>
-      <div><span>YOUR ACCESS</span><h2>{active ? "Plan active" : "Payment required"}</h2><p>{active ? `${entitlement.minutes_remaining} of ${entitlement.minutes_limit} speaking minutes remain. Silence is never counted.` : "Your plan is inactive or has expired. Choose a plan below to continue."}</p></div>
+      <div><span>BETA MONTHLY ACCESS</span><h2>{active ? "Plan active" : "Payment required"}</h2><p>{active ? `${entitlement.minutes_remaining} of ${entitlement.minutes_limit} detected speaking minutes remain (${entitlement.usage_percent}% used). Silence is never counted.` : "Your plan is inactive or has expired. Activate Beta Monthly to continue AI interviews."}</p><div className="usage-meter" aria-label={`${entitlement.usage_percent}% of monthly speaking allowance used`}><i style={{ transform: `scaleX(${entitlement.usage_percent / 100})` }} /></div></div>
       <div>{entitlement.period_end && <small>{active ? "Access through" : "Ended"}<b>{new Date(entitlement.period_end).toLocaleDateString("en-IN", { dateStyle: "medium" })}</b></small>}{entitlement.auto_renew && <button disabled={busy} onClick={() => void cancel()}>Cancel AutoPay</button>}</div>
     </section>}
     {notice && <p className="billing-notice">{notice}</p>}
     <section className="pricing-grid">
-      <Price name="Free account" price="₹0" suffix="forever" items={["One free AI interview trial", "Create and sync your account", "Browse preparation modes", "Local progress tracking"]} action={session ? "Current free account" : "Create account"} onClick={() => session ? undefined : go("/signup")} />
-      {billingEnabled && plans.map((plan, index) => <Price key={plan.id} featured={index === 0} name={plan.name} price={`₹${plan.amount_inr.toLocaleString("en-IN")}`} suffix="30 days" items={[`${plan.interview_minutes_per_month} speaking minutes`, "DSA, LLD, HLD + behavioural rounds", "Company-focused preparation", "Pay only for detected speech"]} action={active && entitlement?.plan_id === plan.id ? "Extend or renew" : "Choose plan"} onClick={() => choose(plan)} />)}
+      <Price name="Free tracking" price="₹0" suffix="forever" items={["LeetCode profile and sheet tracking", "Friends progress tracking", "Cloud sync with an account", "One free AI interview trial"]} action={session ? "Included in your account" : "Create free account"} onClick={() => session ? undefined : go("/signup")} />
+      {billingEnabled && plans.map((plan, index) => <Price key={plan.id} featured={index === 0} name={plan.name} price={`₹${plan.amount_inr.toLocaleString("en-IN")}`} suffix="month" items={[`${plan.interview_minutes_per_month} detected speaking minutes`, "Company-specific LeetCode interviews", "DSA, LLD, HLD + behavioural rounds", "Scorecards, history and usage dashboard"]} action={active && entitlement?.plan_id === plan.id ? "Your plan is active" : "Start Beta Monthly"} onClick={() => active ? undefined : choose(plan)} />)}
     </section>
-    {billingEnabled && <p className="pricing-note">One-time passes expire after 30 days. AutoPay is optional and never preselected. Taxes, if applicable, are shown by Cashfree before payment.</p>}
+    {billingEnabled && <p className="pricing-note"><b>Beta:</b> tracking and friends progress are available now. The paid plan renews monthly and covers the interview features listed above; unfinished future features are not part of this purchase. Cancel AutoPay any time and retain access through the paid period. Taxes, if applicable, are shown by Cashfree before payment.</p>}
     {billingEnabled && selected && <div className="checkout-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setSelected(null); }}><form className="checkout-card" role="dialog" aria-modal="true" aria-labelledby="checkout-title" onSubmit={pay}>
       <button type="button" className="checkout-close" aria-label="Close checkout" onClick={() => setSelected(null)}>×</button>
-      <span>SECURE CHECKOUT</span><h2 id="checkout-title">{selected.name}</h2><p className="checkout-price">₹{selected.amount_inr.toLocaleString("en-IN")} <small>/ {details.auto_renew ? "month" : "30-day pass"}</small></p>
+      <span>SECURE BETA CHECKOUT</span><h2 id="checkout-title">{selected.name}</h2><p className="checkout-price">₹{selected.amount_inr.toLocaleString("en-IN")} <small>/ month</small></p>
       <label>Full name<input required minLength={2} maxLength={100} value={details.customer_name} onChange={e => setDetails({ ...details, customer_name: e.target.value })} /></label>
       <label>Indian mobile number<input required inputMode="numeric" pattern="[6-9][0-9]{9}" placeholder="9876543210" value={details.phone} onChange={e => setDetails({ ...details, phone: e.target.value.replace(/\D/g, "").slice(0, 10) })} /></label>
-      <label className="renew-choice"><input type="checkbox" checked={details.auto_renew} onChange={e => setDetails({ ...details, auto_renew: e.target.checked })} /><span><b>Enable monthly AutoPay</b>Cashfree will collect ₹{selected.amount_inr.toLocaleString("en-IN")} now to authorise the mandate, then every month until cancelled. UPI AutoPay, eligible cards or eNACH may be offered.</span></label>
-      <label className="checkout-accept"><input type="checkbox" required checked={details.accepted} onChange={e => setDetails({ ...details, accepted: e.target.checked })} /><span>I accept the <a href="/terms" target="_blank">Terms</a>, including the selected renewal choice and refund conditions.</span></label>
-      <button className="checkout-pay" disabled={busy || !details.accepted}>{busy ? "Opening secure checkout…" : `Pay ₹${selected.amount_inr.toLocaleString("en-IN")} securely →`}</button>
+      <div className="renew-choice"><span><b>Monthly AutoPay</b>Cashfree collects ₹{selected.amount_inr.toLocaleString("en-IN")} to authorise and start the monthly plan, then renews it each month until cancelled. Available payment methods depend on Cashfree and your bank.</span></div>
+      <label className="checkout-accept"><input type="checkbox" required checked={details.accepted} onChange={e => setDetails({ ...details, accepted: e.target.checked })} /><span>I understand this is a recurring beta subscription and accept the <a href="/terms" target="_blank">Terms</a>, renewal and refund conditions.</span></label>
+      <button className="checkout-pay" disabled={busy || !details.accepted}>{busy ? "Opening secure checkout…" : `Subscribe for ₹${selected.amount_inr.toLocaleString("en-IN")}/month →`}</button>
       <small className="checkout-trust">LeetAlly never receives or stores your card, bank or UPI credentials. Access is granted only after a verified Cashfree webhook.</small>
     </form></div>}
   </>;
@@ -430,7 +444,6 @@ type AccountProgress = {
   activity?: Record<string, number>;
   sheets?: AccountSheet[];
   profile?: { username: string; ranking?: number; totalSolved: number; easySolved: number; mediumSolved: number; hardSolved: number; streak?: number; totalActiveDays?: number; syncedAt?: string };
-  friends?: Array<{ username: string }>;
   planner?: Partial<AccountPlanner>;
   interviews?: AccountInterview[];
 };
@@ -451,6 +464,8 @@ function activityStreak(activity: Record<string, number>): number {
 
 function AccountDashboard({ session, client }: { session: Session; client: SupabaseClient | null }) {
   const [record, setRecord] = useState<{ progress: AccountProgress; updated_at?: string | null } | null>(null);
+  const [entitlement, setEntitlement] = useState<BillingEntitlement | null>(null);
+  const [connectedFriends, setConnectedFriends] = useState(0);
   const [planner, setPlanner] = useState<AccountPlanner>(defaultAccountPlanner);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -473,6 +488,25 @@ function AccountDashboard({ session, client }: { session: Session; client: Supab
     });
     return () => { active = false; };
   }, [client, session.user.id]);
+
+  useEffect(() => {
+    if (!billingEnabled) return;
+    let active = true;
+    void getEntitlement(session.access_token)
+      .then(next => { if (active) setEntitlement(next); })
+      .catch(() => { if (active) setNotice("Plan usage could not be loaded right now."); });
+    return () => { active = false; };
+  }, [session.access_token]);
+
+  useEffect(() => {
+    let active = true;
+    void getFriendConnections(session.access_token)
+      .then(connections => {
+        if (active) setConnectedFriends(connections.filter(item => item.status === "accepted").length);
+      })
+      .catch(() => { if (active) setConnectedFriends(0); });
+    return () => { active = false; };
+  }, [session.access_token]);
 
   const progress = record?.progress || {};
   const selectedSheets = (progress.sheets || []).filter(sheet => sheet.selected);
@@ -538,7 +572,7 @@ function AccountDashboard({ session, client }: { session: Session; client: Supab
     </div>
 
     <div className="mb-8 grid grid-cols-2 gap-3 md:grid-cols-4">
-      {[{ label: "Problems solved", value: solved }, { label: "Current streak", value: `${streak}d` }, { label: "Interviews", value: interviews.length }, { label: "Tracked friends", value: progress.friends?.length || 0 }].map(stat => <div className="rounded-2xl border border-slate-800 bg-[#090e17] p-5" key={stat.label}><span className="font-mono text-[8px] uppercase tracking-[0.16em] text-slate-500">{stat.label}</span><b className="mt-3 block text-3xl tracking-[-0.04em] text-slate-100">{stat.value}</b></div>)}
+      {[{ label: "Problems solved", value: solved }, { label: "Current streak", value: `${streak}d` }, { label: "Interviews", value: interviews.length }, { label: "Connected friends", value: connectedFriends }].map(stat => <div className="rounded-2xl border border-slate-800 bg-[#090e17] p-5" key={stat.label}><span className="font-mono text-[8px] uppercase tracking-[0.16em] text-slate-500">{stat.label}</span><b className="mt-3 block text-3xl tracking-[-0.04em] text-slate-100">{stat.value}</b></div>)}
     </div>
 
     {notice && <p className="mb-6 rounded-xl border border-blue-400/20 bg-blue-400/8 px-4 py-3 text-sm text-blue-100" role="status">{notice}</p>}
@@ -562,6 +596,12 @@ function AccountDashboard({ session, client }: { session: Session; client: Supab
       </div>
 
       <aside className="space-y-7">
+        {billingEnabled && <section className="rounded-3xl border border-blue-400/20 bg-[#080d15] p-6">
+          <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-blue-300">Beta access</span>
+          <div className="mt-2 flex items-start justify-between gap-4"><div><h2 className="text-xl font-bold">{entitlement?.status === "active" ? entitlement.plan_name || "Beta Monthly" : "Free plan"}</h2><p className="mt-2 text-xs leading-5 text-slate-500">{entitlement?.status === "active" ? "Company-specific interviews, scorecards and history are unlocked." : "Tracking, sheets and friends remain free. One interview trial is included."}</p></div><b className={`rounded-full border px-3 py-1 font-mono text-[8px] uppercase tracking-wider ${entitlement?.status === "active" ? "border-emerald-400/25 bg-emerald-400/8 text-emerald-200" : "border-slate-700 text-slate-400"}`}>{entitlement?.status === "active" ? "Active" : "Free"}</b></div>
+          {entitlement?.status === "active" && <><div className="mt-6 flex items-end justify-between"><span className="text-[10px] text-slate-500">Detected speaking usage</span><b className="text-sm text-blue-200">{entitlement.minutes_remaining}/{entitlement.minutes_limit} min left</b></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800" role="progressbar" aria-label="Monthly interview speaking usage" aria-valuemin={0} aria-valuemax={100} aria-valuenow={entitlement.usage_percent}><i className="block h-full w-full origin-left rounded-full bg-blue-300" style={{ transform: `scaleX(${entitlement.usage_percent / 100})` }} /></div><p className="mt-3 text-[9px] text-slate-600">{entitlement.usage_percent}% used · silence is not counted{entitlement.period_end ? ` · renews ${dateLabel(entitlement.period_end)}` : ""}</p></>}
+          <a className="mt-6 flex items-center justify-between rounded-full border border-slate-700 px-4 py-3 text-xs text-slate-200 hover:border-blue-300" href="/pricing">{entitlement?.status === "active" ? "Manage subscription" : "View Beta Monthly"}<span>↗</span></a>
+        </section>}
         <section className="rounded-3xl border border-slate-800 bg-[#080d15] p-6">
           <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-blue-300">LeetCode profile</span><h2 className="mt-2 text-xl font-bold">{progress.profile?.username || "Not connected"}</h2>
           {progress.profile ? <><div className="mt-5 grid grid-cols-2 gap-2">{[["Easy", progress.profile.easySolved], ["Medium", progress.profile.mediumSolved], ["Hard", progress.profile.hardSolved], ["Ranking", progress.profile.ranking ? `#${progress.profile.ranking.toLocaleString()}` : "—"]].map(([label, value]) => <span className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-[9px] text-slate-500" key={label as string}><b className="mb-1 block text-sm text-slate-200">{value}</b>{label}</span>)}</div><p className="mt-4 text-[10px] text-slate-500">Last synced {dateLabel(progress.profile.syncedAt)}</p></> : <p className="mt-4 text-xs leading-5 text-slate-500">Add your LeetCode username in extension Settings to import accepted history and sheet completion.</p>}
@@ -589,10 +629,9 @@ function AccountDashboard({ session, client }: { session: Session; client: Supab
   </section>;
 }
 
-function Login({ session, client, initialMode = "signin", returnPath = "/login" }: { session: Session | null; client: SupabaseClient | null; initialMode?: "signin" | "signup"; returnPath?: string }) {
-  const [mode, setMode] = useState<"signin" | "signup">(initialMode); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
-  useEffect(() => { setMode(initialMode); setNotice(""); setPassword(""); }, [initialMode]);
-  if (session) return <AccountDashboard session={session} client={client} />;
+function Login({ session, client, initialMode = "signin", returnPath = "/login", recoveryMode = false, onRecoveryComplete }: { session: Session | null; client: SupabaseClient | null; initialMode?: "signin" | "signup"; returnPath?: string; recoveryMode?: boolean; onRecoveryComplete?: () => void }) {
+  const [mode, setMode] = useState<"signin" | "signup">(initialMode); const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [confirmPassword, setConfirmPassword] = useState(""); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
+  useEffect(() => { setMode(initialMode); setNotice(""); setPassword(""); setConfirmPassword(""); }, [initialMode]);
   const friendlyError = (message: string) => {
     const normalized = message.toLowerCase();
     if (normalized.includes("invalid login credentials")) return "Email or password is incorrect.";
@@ -623,8 +662,37 @@ function Login({ session, client, initialMode = "signin", returnPath = "/login" 
       if (error) { setNotice("Couldn't continue with Google. Please try again."); setBusy(false); }
     } catch { setNotice("Couldn't continue with Google. Please try again."); setBusy(false); }
   };
+  const forgotPassword = async () => {
+    if (!client || busy) return;
+    if (!email.trim()) { setNotice("Enter your email address first."); return; }
+    setBusy(true); setNotice("");
+    try {
+      const { error } = await client.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${location.origin}/login?recovery=1` });
+      if (error) setNotice(friendlyError(error.message));
+      else setNotice("If an account exists for that email, a password reset link has been sent.");
+    } catch { setNotice("We couldn't send the reset link. Please try again."); }
+    finally { setBusy(false); }
+  };
+  const updatePassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!client || !session || busy) return;
+    if (password.length < 8) { setNotice("Use a password with at least 8 characters."); return; }
+    if (password !== confirmPassword) { setNotice("The passwords do not match."); return; }
+    setBusy(true); setNotice("");
+    try {
+      const { error } = await client.auth.updateUser({ password });
+      if (error) { setNotice(friendlyError(error.message)); return; }
+      await client.auth.signOut({ scope: "local" });
+      setPassword(""); setConfirmPassword("");
+      setNotice("Password updated. Sign in with your new password.");
+      onRecoveryComplete?.();
+    } catch { setNotice("We couldn't update your password. Please request a new reset link."); }
+    finally { setBusy(false); }
+  };
   const authReady = Boolean(client);
-  return <section className="auth-card"><span>LEETALLY ACCOUNT</span><h1>{mode === "signin" ? "Continue your signal." : "Start with one real round."}</h1><button className="google" disabled={!authReady || busy} onClick={() => void google()}><img src="/google.svg" alt="" aria-hidden="true" />{busy ? "Please wait…" : "Continue with Google"}</button><div className="divider">OR</div><form onSubmit={emailAuth}><label>Email<input required autoComplete="email" type="email" value={email} onChange={e => setEmail(e.target.value)} /></label><label>Password<input required autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} type="password" value={password} onChange={e => setPassword(e.target.value)} /></label><button disabled={!authReady || busy}>{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</button></form><button className="switch" disabled={busy} onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setNotice(""); setPassword(""); }}>{mode === "signin" ? "Create a new account" : "Already have an account?"}</button><p className="auth-terms">By continuing, you confirm you are 18+ and agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>{notice && <p className="form-notice" role="status">{notice}</p>}</section>;
+  if (recoveryMode) return <section className="auth-card"><span>RESET PASSWORD</span><h1>Choose a new password.</h1>{!client ? <p className="form-notice" role="status">Checking your reset link…</p> : !session ? <p className="form-notice" role="alert">This reset link is invalid or expired. Return to sign in and request a new one.</p> : <form onSubmit={updatePassword}><label>New password<input required autoComplete="new-password" minLength={8} type="password" value={password} onChange={e => setPassword(e.target.value)} /></label><label>Confirm new password<input required autoComplete="new-password" minLength={8} type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label><button disabled={busy}>{busy ? "Updating…" : "Update password"}</button></form>}{notice && <p className="form-notice" role="status">{notice}</p>}</section>;
+  if (session) return <AccountDashboard session={session} client={client} />;
+  return <section className="auth-card"><span>LEETALLY ACCOUNT</span><h1>{mode === "signin" ? "Continue your signal." : "Start with one real round."}</h1><button className="google" disabled={!authReady || busy} onClick={() => void google()}><img src="/google.svg" alt="" aria-hidden="true" />{busy ? "Please wait…" : "Continue with Google"}</button><div className="divider">OR</div><form onSubmit={emailAuth}><label>Email<input required autoComplete="email" type="email" value={email} onChange={e => setEmail(e.target.value)} /></label><label>Password<input required autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={8} type="password" value={password} onChange={e => setPassword(e.target.value)} /></label><button disabled={!authReady || busy}>{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</button></form><div className="auth-secondary-actions"><button type="button" className="switch" disabled={busy} onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setNotice(""); setPassword(""); }}>{mode === "signin" ? "Create a new account" : "Already have an account?"}</button>{mode === "signin" && <button type="button" className="switch" disabled={!authReady || busy} onClick={() => void forgotPassword()}>Forgot password?</button>}</div><p className="auth-terms">By continuing, you confirm you are 18+ and agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>{notice && <p className="form-notice" role="status">{notice}</p>}</section>;
 }
 
 function validExtensionRedirect(): string | null {
@@ -730,26 +798,48 @@ function Legal({ type }: { type: "privacy" | "terms" }) {
 }
 
 export default function App() {
-  const [route, go] = useRoute(); const [session, setSession] = useState<Session | null>(null); const [client, setClient] = useState<SupabaseClient | null>(null); const [menu, setMenu] = useState(false); const [navCompact, setNavCompact] = useState(() => scrollY > 48);
+  const [route, go] = useRoute(); const [session, setSession] = useState<Session | null>(null); const [client, setClient] = useState<SupabaseClient | null>(null); const [passwordRecovery, setPasswordRecovery] = useState(() => new URLSearchParams(location.search).get("recovery") === "1"); const [menu, setMenu] = useState(false); const [navCompact, setNavCompact] = useState(() => scrollY > 48);
   useEffect(() => {
     let active = true;
     let unsubscribe: (() => void) | undefined;
     void import("./supabase").then(async ({ supabase }) => {
       if (!active || !supabase) return;
-      setClient(supabase);
-      const subscription = supabase.auth.onAuthStateChange((_event, next) => {
-        if (active) setSession(next);
+      const subscription = supabase.auth.onAuthStateChange((event, next) => {
+        if (active) {
+          setSession(next);
+          if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+        }
       }).data.subscription;
       unsubscribe = () => subscription.unsubscribe();
       const { data } = await supabase.auth.getSession();
-      if (active) setSession(data.session);
+      if (active) {
+        // Do not expose the client to ExtensionAuth until Supabase has consumed
+        // the OAuth callback. Otherwise it starts another OAuth request while
+        // the returned session is still being restored, causing a sign-in loop.
+        setSession(data.session);
+        setClient(supabase);
+      }
     });
     return () => {
       active = false;
       unsubscribe?.();
     };
   }, []);
-  useEffect(() => { document.title = routeTitles[route]; setMenu(false); }, [route]);
+  const finishPasswordRecovery = () => {
+    history.replaceState({}, "", "/login");
+    setPasswordRecovery(false);
+    setSession(null);
+  };
+  useEffect(() => {
+    document.title = routeTitles[route];
+    const canonicalUrl = new URL(route, "https://leetally-web.vercel.app").href;
+    document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.setAttribute("href", canonicalUrl);
+    document.querySelector<HTMLMetaElement>('meta[name="description"]')?.setAttribute("content", routeDescriptions[route]);
+    document.querySelector<HTMLMetaElement>('meta[property="og:title"]')?.setAttribute("content", routeTitles[route]);
+    document.querySelector<HTMLMetaElement>('meta[property="og:description"]')?.setAttribute("content", routeDescriptions[route]);
+    document.querySelector<HTMLMetaElement>('meta[property="og:url"]')?.setAttribute("content", canonicalUrl);
+    setMenu(false);
+  }, [route]);
   useEffect(() => {
     let frame = 0;
     const update = () => {
@@ -798,7 +888,7 @@ export default function App() {
     };
   }, [route]);
   const isPrepRoute = (["/preparation", "/company-dsa", "/dsa-patterns", "/sql-sheet"] as Route[]).includes(route);
-  const page = isPrepRoute ? <Suspense fallback={<div className="route-loading" role="status">Loading preparation workspace…</div>}><PrepWorkspace route={route as PrepRoute} go={go} /></Suspense> : route === "/" ? <Home go={go} /> : route === "/features" ? <Features /> : route === "/pricing" ? <Pricing go={go} session={session} /> : route === "/feedback" ? <FormPage kind="feedback" client={client} /> : route === "/contact" ? <FormPage kind="contact" client={client} /> : route === "/login" ? <Login session={session} client={client} /> : route === "/signup" ? <Login session={session} client={client} initialMode="signup" /> : route === "/extension-auth" ? <ExtensionAuth session={session} client={client} /> : <Legal type={route === "/privacy" ? "privacy" : "terms"} />;
+  const page = isPrepRoute ? <Suspense fallback={<div className="route-loading" role="status">Loading preparation workspace…</div>}><PrepWorkspace route={route as PrepRoute} go={go} /></Suspense> : route === "/" ? <Home go={go} /> : route === "/features" ? <Features /> : route === "/pricing" ? <Pricing go={go} session={session} /> : route === "/feedback" ? <FormPage kind="feedback" client={client} /> : route === "/contact" ? <FormPage kind="contact" client={client} /> : route === "/login" ? <Login session={session} client={client} recoveryMode={passwordRecovery} onRecoveryComplete={finishPasswordRecovery} /> : route === "/signup" ? <Login session={session} client={client} initialMode="signup" /> : route === "/extension-auth" ? <ExtensionAuth session={session} client={client} /> : <Legal type={route === "/privacy" ? "privacy" : "terms"} />;
   const accountName = session
     ? String(session.user.user_metadata?.given_name || session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "Account")
     : "";

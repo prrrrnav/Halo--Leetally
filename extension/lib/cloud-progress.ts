@@ -1,8 +1,21 @@
 import { browser } from "wxt/browser";
-import { loadProgress, PROGRESS_STORAGE_KEY, saveProgress, type ProgressData } from "./progress";
+import { DEFAULT_PROGRESS, loadProgress, PROGRESS_STORAGE_KEY, saveProgress, type ProgressData } from "./progress";
 import { supabase } from "./supabase";
 
 let reconciling = false;
+export const PROGRESS_OWNER_STORAGE_KEY = "leetally-progress-owner-v1";
+
+function freshProgress(): ProgressData {
+  return {
+    ...DEFAULT_PROGRESS,
+    solvedSlugs: {},
+    activity: {},
+    friends: [],
+    interviews: [],
+    sheets: DEFAULT_PROGRESS.sheets.map((sheet) => ({ ...sheet })),
+    planner: { ...DEFAULT_PROGRESS.planner },
+  };
+}
 
 function mergeProgress(local: ProgressData, remote: Partial<ProgressData>): ProgressData {
   const remoteInterviews = remote.interviews ?? [];
@@ -44,21 +57,70 @@ async function uploadProgress(userId: string, progress: ProgressData): Promise<v
   if (error) throw error;
 }
 
+export function removeLeetCodeIdentity(progress: ProgressData): ProgressData {
+  const importedDates = new Set(Object.keys(progress.profile?.submissionActivity ?? {}));
+  return {
+    ...progress,
+    profile: undefined,
+    activity: Object.fromEntries(Object.entries(progress.activity).filter(([date]) => !importedDates.has(date))),
+    sheets: progress.sheets.map((sheet) => sheet.autoTracked
+      ? { ...sheet, completed: 0, autoTracked: false }
+      : sheet),
+  };
+}
+
+export async function saveLinkedLeetCodeProgress(
+  userId: string,
+  username: string,
+  progress: ProgressData,
+): Promise<void> {
+  const normalizedUsername = username.trim().toLowerCase();
+  const { error: linkError } = await supabase.from("leetcode_identity_links").upsert({
+    user_id: userId,
+    username: username.trim(),
+    normalized_username: normalizedUsername,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id" });
+  if (linkError) {
+    throw linkError;
+  }
+  await uploadProgress(userId, progress);
+  await browser.storage.local.set({ [PROGRESS_OWNER_STORAGE_KEY]: userId });
+}
+
+export async function unlinkLeetCodeIdentity(userId: string): Promise<ProgressData> {
+  const current = await loadProgress();
+  const unlinked = removeLeetCodeIdentity(current);
+  const { error } = await supabase.from("leetcode_identity_links").delete().eq("user_id", userId);
+  if (error) throw error;
+  await saveProgress(unlinked);
+  await uploadProgress(userId, unlinked);
+  await browser.storage.local.set({ [PROGRESS_OWNER_STORAGE_KEY]: userId });
+  return unlinked;
+}
+
+export async function clearLocalAccountProgress(): Promise<void> {
+  await browser.storage.local.remove([PROGRESS_STORAGE_KEY, PROGRESS_OWNER_STORAGE_KEY]);
+}
+
 export async function reconcileProgressWithCloud(userId: string): Promise<ProgressData> {
   reconciling = true;
   try {
     const local = await loadProgress();
+    const owner = (await browser.storage.local.get(PROGRESS_OWNER_STORAGE_KEY))[PROGRESS_OWNER_STORAGE_KEY] as string | undefined;
     const { data, error } = await supabase
       .from("user_progress")
       .select("progress")
       .eq("user_id", userId)
       .maybeSingle();
     if (error) throw error;
-    const merged = data?.progress
-      ? mergeProgress(local, data.progress as Partial<ProgressData>)
-      : local;
+    const remote = data?.progress as Partial<ProgressData> | undefined;
+    const merged = remote
+      ? (!owner || owner === userId ? mergeProgress(local, remote) : mergeProgress(freshProgress(), remote))
+      : (owner && owner !== userId ? freshProgress() : local);
     await saveProgress(merged);
     await uploadProgress(userId, merged);
+    await browser.storage.local.set({ [PROGRESS_OWNER_STORAGE_KEY]: userId });
     return merged;
   } finally {
     reconciling = false;

@@ -6,6 +6,7 @@ import hmac
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -34,31 +35,29 @@ class BillingPlan:
     interval: str | None = None
     supports_auto_renew: bool = False
     period_days: int = 30
+    features: tuple[str, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 PLANS: dict[str, BillingPlan] = {
-    "sde1_sprint": BillingPlan(
-        id="sde1_sprint",
-        name="SDE-1 Sprint",
-        purchase_type="one_time",
+    "beta_monthly": BillingPlan(
+        id="beta_monthly",
+        name="LeetAlly Beta Monthly",
+        purchase_type="subscription",
         amount_inr=799,
         currency="INR",
         interview_minutes_per_month=240,
         interval="month",
         supports_auto_renew=True,
-    ),
-    "sde1_intensive": BillingPlan(
-        id="sde1_intensive",
-        name="SDE-1 Intensive",
-        purchase_type="one_time",
-        amount_inr=1_199,
-        currency="INR",
-        interview_minutes_per_month=600,
-        interval="month",
-        supports_auto_renew=True,
+        features=(
+            "company_specific_interviews",
+            "dsa_lld_hld_behavioral",
+            "interview_scorecards",
+            "interview_history",
+            "monthly_usage_dashboard",
+        ),
     ),
 }
 
@@ -91,17 +90,26 @@ class BillingEntitlement:
     provider_reference: str = ""
 
     def public_dict(self) -> dict[str, Any]:
+        plan = PLANS.get(self.plan_id)
+        remaining_seconds = max(0, self.minutes_limit * 60 - self.speech_seconds_used)
         return {
             "plan_id": self.plan_id,
+            "plan_name": plan.name if plan else self.plan_id,
             "status": self.status,
             "is_lifetime": self.is_lifetime,
             "minutes_limit": self.minutes_limit,
             "minutes_used": self.minutes_used,
             "minutes_remaining": max(0, self.minutes_limit - self.minutes_used),
             "speech_seconds_used": self.speech_seconds_used,
+            "speech_seconds_remaining": remaining_seconds,
+            "usage_percent": (
+                min(100, round(self.speech_seconds_used * 100 / (self.minutes_limit * 60)))
+                if self.minutes_limit else 0
+            ),
             "auto_renew": self.auto_renew,
             "period_start": self.period_start,
             "period_end": self.period_end,
+            "features": list(plan.features) if plan else [],
         }
 
 
@@ -154,6 +162,17 @@ class InMemoryBillingRepository:
         self.events.add(event_id)
         plan = PLANS[checkout.plan_id]
         now = datetime.now(timezone.utc)
+        current = self.entitlements.get(checkout.user_id)
+        # A verified renewal buys a full additional period. If Cashfree
+        # delivers it slightly before the current period closes, extend from
+        # that paid-through date instead of silently shortening access.
+        period_start = (
+            current.period_end
+            if current is not None
+            and current.provider_reference == checkout.reference
+            and current.period_end > now
+            else now
+        )
         self.entitlements[checkout.user_id] = BillingEntitlement(
             user_id=checkout.user_id,
             plan_id=plan.id,
@@ -161,9 +180,12 @@ class InMemoryBillingRepository:
             is_lifetime=plan.id == "lifetime",
             minutes_limit=plan.interview_minutes_per_month,
             minutes_used=0,
-            period_start=now,
-            period_end=now + timedelta(days=plan.period_days),
-            auto_renew=checkout.purchase_type == "subscription",
+            period_start=period_start,
+            period_end=period_start + timedelta(days=plan.period_days),
+            auto_renew=(
+                checkout.purchase_type == "subscription"
+                and checkout.status != "cancelled"
+            ),
             provider_reference=checkout.reference,
         )
         checkout.status = "paid"
@@ -404,7 +426,7 @@ class CashfreeClient:
             "customer_email": user.email,
             "customer_phone": phone,
         }
-        purchase_type = "subscription" if auto_renew and plan.supports_auto_renew else "one_time"
+        purchase_type = plan.purchase_type
         if purchase_type == "one_time":
             reference = f"la_ord_{unique}"
             response = await self._post("/orders", {
@@ -463,7 +485,7 @@ def verify_cashfree_signature(raw_body: bytes, timestamp: str, signature: str, s
     return hmac.compare_digest(expected, signature)
 
 
-def parse_successful_webhook(raw_body: bytes) -> tuple[str, str, int | None, str | None]:
+def parse_successful_webhook(raw_body: bytes) -> tuple[str, str, Decimal | None, str | None]:
     try:
         payload = json.loads(raw_body)
         data = payload.get("data", {})
@@ -476,6 +498,11 @@ def parse_successful_webhook(raw_body: bytes) -> tuple[str, str, int | None, str
             or data.get("subscription_id")
         )
         event_type = str(payload.get("type") or "unknown")
+        # Cashfree can emit AUTH_STATUS and PAYMENT_SUCCESS for the same
+        # authorization. Only the canonical payment-success event may grant or
+        # renew access, otherwise one payment can be applied twice.
+        if event_type.upper() != "SUBSCRIPTION_PAYMENT_SUCCESS":
+            raise ValueError("Webhook type cannot activate an entitlement.")
         payment_status = str(
             payment.get("payment_status") or payment_details.get("payment_status")
             or data.get("payment_status") or ""
@@ -495,8 +522,9 @@ def parse_successful_webhook(raw_body: bytes) -> tuple[str, str, int | None, str
             or order.get("order_currency")
             or data.get("payment_currency")
         )
-        return reference, event_type, int(float(amount)) if amount is not None else None, currency
-    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
+        parsed_amount = Decimal(str(amount)) if amount is not None else None
+        return reference, event_type, parsed_amount, str(currency).upper() if currency else None
+    except (AttributeError, TypeError, ValueError, InvalidOperation, json.JSONDecodeError) as error:
         raise ValueError("Invalid or non-successful Cashfree webhook.") from error
 
 
@@ -512,15 +540,21 @@ def parse_lifecycle_webhook(raw_body: bytes) -> tuple[str, str, str | None, bool
         if not isinstance(reference, str) or not reference:
             raise ValueError("Missing subscription reference.")
         if event_type in {"SUBSCRIPTION_PAYMENT_FAILED", "SUBSCRIPTION_PAYMENT_CANCELLED"}:
-            return reference, event_type, "past_due", None
+            # A failed future renewal must not revoke the period the customer
+            # has already paid for. The normal period expiry gate removes
+            # access if no later successful charge arrives.
+            return reference, event_type, None, None
         if event_type != "SUBSCRIPTION_STATUS_CHANGED":
             raise ValueError("Not a lifecycle event.")
         if provider_status == "ACTIVE":
-            return reference, event_type, None, True
-        if provider_status in {"ON_HOLD", "CUSTOMER_PAUSED"}:
-            return reference, event_type, "past_due", None
-        if provider_status in {"EXPIRED", "LINK_EXPIRED"}:
-            return reference, event_type, "expired", False
+            # Payment-success webhooks are the only source of paid access and
+            # renewal state. An out-of-order ACTIVE event cannot undo a user's
+            # cancellation.
+            return reference, event_type, None, None
+        if provider_status == "ON_HOLD":
+            return reference, event_type, None, None
+        if provider_status in {"CUSTOMER_PAUSED", "EXPIRED", "LINK_EXPIRED"}:
+            return reference, event_type, None, False
         if provider_status in {"COMPLETED", "CUSTOMER_CANCELLED", "CANCELLED", "CARD_EXPIRED"}:
             return reference, event_type, None, False
         raise ValueError("Lifecycle status does not change entitlement.")

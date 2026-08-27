@@ -95,7 +95,8 @@ Disclose the following categories:
   storage.
 - Website content: current supported problem text, editor language/code, visible
   output, problem URL/slug and topic/company signals.
-- User activity: solved-problem progress, selected sheets and interview activity.
+- User activity: solved-problem progress, selected sheets, accepted friend
+  connections and interview activity.
 - User-generated content and personal communications: voice segments,
   transcripts, interview answers, code revisions and feedback.
 - Financial/payment information: do **not** select this category for the initial
@@ -114,7 +115,9 @@ processors required to provide, secure or legally operate the service.
 4. Choose DSA and press Start. Allow microphone access when Chrome asks.
 5. Speak a short approach. Confirm the transcript and AI follow-up appear.
 6. End the interview and confirm a scorecard appears in the extension popup.
-7. Open the website account dashboard to test data export and sign-out.
+7. In Friends, add a second reviewer account by email and confirm progress stays
+   hidden until that account accepts the request.
+8. Open the website account dashboard to test data export and sign-out.
 
 Provide a dedicated reviewer account with a confirmed email and enough trial or
 paid entitlement to complete the steps. Never place credentials in the public

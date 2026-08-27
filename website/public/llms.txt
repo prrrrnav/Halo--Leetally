@@ -1,0 +1,24 @@
+# LeetAlly
+
+> Company-specific LeetCode tracking, realistic interview practice, and friends progress in one Chrome extension.
+
+LeetAlly is a Chrome extension and companion website for company-specific LeetCode preparation. Its core product is a loop of focused question tracking, realistic AI interviews on the active LeetCode problem, evidence-backed scorecards, and friends progress tracking.
+
+## Product access
+
+- Free: public LeetCode profile tracking, sheet progress, friends progress, cloud sync with an account, and one AI interview trial.
+- Beta Monthly: INR 799 per month for 240 detected speaking minutes, repeat company-specific interviews, DSA/LLD/HLD/behavioural rounds, scorecards, history, and a usage dashboard.
+- Only detected speaking time counts. Silence does not count toward the allowance.
+- Paid access begins only after LeetAlly verifies a Cashfree payment server-side.
+
+## Important pages
+
+- [Home](https://leetally-web.vercel.app/): product overview and primary workflows.
+- [Features](https://leetally-web.vercel.app/features): tracking and interview capabilities.
+- [Pricing](https://leetally-web.vercel.app/pricing): free and Beta Monthly access.
+- [Company preparation](https://leetally-web.vercel.app/company-dsa): company-specific LeetCode questions.
+- [Privacy](https://leetally-web.vercel.app/privacy): data handling and user rights.
+- [Terms](https://leetally-web.vercel.app/terms): service and subscription terms.
+- [Support](mailto:watershaper9.1@gmail.com): account, billing, accessibility, and security support.
+
+LeetAlly is not affiliated with or endorsed by LeetCode or any company represented in its independent preparation sets.

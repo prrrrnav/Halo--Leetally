@@ -11,6 +11,7 @@
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
+    "test": "node --test tests/*.test.mjs",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare"
   },

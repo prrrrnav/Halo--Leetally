@@ -51,14 +51,13 @@ async function fetchLeetCodeListSlugs(listId: string): Promise<string[]> {
   return result.data?.problemsetQuestionList?.questions?.map((question) => question.titleSlug) ?? [];
 }
 
-export async function updateSelectedSheetProgress(
+export async function updateAllSheetProgress(
   sheets: SheetProgress[],
   acceptedSlugs: string[],
   acceptedProblemIds: number[] = [],
 ): Promise<SheetProgress[]> {
   const accepted = new Set(acceptedSlugs);
   return Promise.all(sheets.map(async (sheet) => {
-    if (!sheet.selected) return sheet;
     if (sheet.dataFile) {
       const bundled = await calculateBundledProgress(sheet.dataFile, acceptedProblemIds);
       if (bundled?.total) {

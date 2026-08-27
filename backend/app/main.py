@@ -6,6 +6,7 @@ import math
 import struct
 import wave
 from datetime import datetime, timezone
+from uuid import UUID
 from fastapi import (
     Depends,
     FastAPI,
@@ -15,7 +16,7 @@ from fastapi import (
     status,
     Request,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .adapters import (
@@ -39,6 +40,7 @@ from .billing import (
     verify_cashfree_signature,
 )
 from .account_data import AccountDataError, SupabaseAccountDataService
+from .friends import FriendServiceError, SupabaseFriendService
 from .dependencies import (
     current_user,
     get_ai_provider,
@@ -66,13 +68,13 @@ from .schemas import (
     InterviewCompleteIn,
     InterviewAssessmentOut,
     RealtimeSessionCreate,
-    SpeechSynthesisIn,
-    SpeechSynthesisOut,
     UserOut,
     BillingCheckoutIn,
     BillingCheckoutOut,
     BillingEntitlementOut,
     BillingPlanOut,
+    FriendConnectionOut,
+    FriendRequestIn,
 )
 from .voice_profiles import company_voice_reference
 from .trial_access import TrialAccessError, TrialAccessRepository
@@ -112,6 +114,21 @@ app.add_middleware(
         "Idempotency-Key",
     ],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=()"
+    if request.url.path.startswith(("/api/v1/billing", "/api/v1/interviews", "/api/v1/account", "/api/v1/friends")):
+        response.headers["Cache-Control"] = "no-store"
+    if settings.app_env.lower() == "production":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 @app.get("/api/v1/health")
@@ -171,6 +188,12 @@ async def create_billing_checkout(
             detail="Billing is not enabled yet.",
         )
     try:
+        existing = await repository.get_entitlement(user.id)
+        if existing is not None and existing.status == "active":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Your Beta Monthly plan is already active. Cancel renewal before starting another subscription.",
+            )
         provider = get_cashfree_client(settings)
         plan = PLANS[payload.plan_id]
         checkout = await provider.create_checkout(
@@ -178,7 +201,7 @@ async def create_billing_checkout(
             plan=plan,
             customer_name=payload.customer_name,
             phone=payload.phone,
-            auto_renew=payload.auto_renew,
+            auto_renew=True,
         )
         await repository.save_checkout(checkout)
     except BillingConfigurationError as error:
@@ -288,11 +311,13 @@ async def cancel_billing_renewal(
     return {"cancelled": True, "access_until": entitlement.period_end}
 
 
-@app.get("/api/v1/billing/return", response_class=HTMLResponse)
+@app.api_route("/api/v1/billing/return", methods=["GET", "POST"])
 async def billing_return():
-    return HTMLResponse(
-        "<main><h1>Payment received</h1>"
-        "<p>You can close this tab and return to LeetAlly.</p></main>"
+    # The browser return is informational only. Entitlements are granted solely
+    # by the signature-verified Cashfree webhook above.
+    return RedirectResponse(
+        settings.billing_customer_return_url,
+        status_code=status.HTTP_303_SEE_OTHER,
     )
 
 
@@ -316,25 +341,41 @@ async def create_interview(
     user: AuthenticatedUser = Depends(current_user),
     repository: InterviewRepository = Depends(get_repository),
     trial_access: TrialAccessRepository = Depends(get_trial_access_repository),
+    billing_repository: BillingRepository = Depends(get_billing_repository),
 ):
-    try:
-        trial_available = await trial_access.claim(
-            user_id=user.id,
-            limit=settings.ai_interview_trial_limit,
-        )
-    except TrialAccessError as error:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="We could not verify trial access. Please try again shortly.",
-        ) from error
-    if not trial_available:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Your one free AI interview has already been used. More access is coming soon.",
-        )
+    access_tier = "trial"
+    if settings.billing_enabled:
+        try:
+            entitlement = await billing_repository.get_entitlement(user.id)
+        except BillingProviderError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="We could not verify your interview access. Please try again shortly.",
+            ) from error
+        if entitlement is not None and entitlement.status == "active":
+            access_tier = "beta_monthly"
+
+    if access_tier == "trial":
+        try:
+            trial_available = await trial_access.claim(
+                user_id=user.id,
+                limit=settings.ai_interview_trial_limit,
+            )
+        except TrialAccessError as error:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="We could not verify trial access. Please try again shortly.",
+            ) from error
+        if not trial_available:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Your free AI interview has been used. Activate Beta Monthly to continue interviewing.",
+            )
+    interview_data = payload.model_dump()
+    interview_data["access_tier"] = access_tier
     return await repository.create(
         user_id=user.id,
-        data=payload.model_dump(),
+        data=interview_data,
     )
 
 
@@ -393,6 +434,11 @@ async def submit_interview_audio(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Interview not found.",
         )
+    if interview.status == "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This interview is already complete.",
+        )
 
     content_type = (
         (audio.content_type or "")
@@ -440,7 +486,7 @@ async def submit_interview_audio(
             interviewer_message="",
         )
 
-    if settings.billing_enabled:
+    if settings.billing_enabled and interview.access_tier == "beta_monthly":
         entitlement = await billing_repository.get_entitlement(user.id)
         if entitlement is None or entitlement.status != "active":
             raise HTTPException(status_code=402, detail="No active interview entitlement.")
@@ -452,7 +498,6 @@ async def submit_interview_audio(
         "Received interview audio:",
         {
             "interview_id": interview_id,
-            "user_id": user.id,
             "filename": audio.filename,
             "content_type": content_type,
             "size_bytes": len(audio_bytes),
@@ -508,7 +553,7 @@ async def submit_interview_audio(
             detail=str(error),
         ) from error
 
-    if settings.billing_enabled:
+    if settings.billing_enabled and interview.access_tier == "beta_monthly":
         usage_event_id = hashlib.sha256(
             interview_id.encode("utf-8") + audio_bytes
         ).hexdigest()
@@ -756,48 +801,6 @@ async def complete_interview(
         raise HTTPException(status_code=404, detail="Interview not found.")
     return assessment
 
-@app.post(
-    "/api/v1/speech",
-    response_model=SpeechSynthesisOut,
-)
-async def synthesize_speech(
-    payload: SpeechSynthesisIn,
-    user: AuthenticatedUser = Depends(current_user),
-    speech_provider: SpeechProvider = Depends(
-        get_speech_provider
-    ),
-) -> SpeechSynthesisOut:
-    try:
-        speech = await speech_provider.synthesize(
-            payload.text,
-            company_voice_reference(
-                payload.company_id,
-                settings.fish_audio_reference_id,
-            ),
-        )
-
-    except SpeechServiceError as error:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(error),
-        ) from error
-
-    print(
-        "Fish Audio standalone synthesis complete:",
-        {
-            "user_id": user.id,
-            "content_type": speech.content_type,
-            "size_bytes": len(speech.data),
-        },
-    )
-
-    return SpeechSynthesisOut(
-        audio_base64=base64.b64encode(
-            speech.data
-        ).decode("ascii"),
-        audio_content_type=speech.content_type,
-    )
-
 @app.post("/api/v1/realtime/session")
 async def create_realtime_session(
     payload: RealtimeSessionCreate,
@@ -843,6 +846,17 @@ async def update_interview_context(
     user: AuthenticatedUser = Depends(current_user),
     repository: InterviewRepository = Depends(get_repository),
 ):
+    existing = await repository.get(interview_id=interview_id, user_id=user.id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found.",
+        )
+    if existing.status == "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A completed interview cannot be changed.",
+        )
     interview = await repository.update_context(
         interview_id=interview_id,
         user_id=user.id,
@@ -850,12 +864,6 @@ async def update_interview_context(
             exclude_none=True,
         ),
     )
-
-    if interview is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Interview not found.",
-        )
 
     print(
         "Interview context updated:",
@@ -903,3 +911,47 @@ async def delete_account(
     except AccountDataError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return {"deleted": True}
+
+
+@app.get("/api/v1/friends", response_model=list[FriendConnectionOut])
+async def list_friends(user: AuthenticatedUser = Depends(current_user)):
+    try:
+        return await SupabaseFriendService(settings).list(user.id)
+    except FriendServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.post("/api/v1/friends", response_model=list[FriendConnectionOut])
+async def request_friend(
+    payload: FriendRequestIn,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        return await SupabaseFriendService(settings).create(user.id, payload.email)
+    except FriendServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.post(
+    "/api/v1/friends/{relationship_id}/accept",
+    response_model=list[FriendConnectionOut],
+)
+async def accept_friend(
+    relationship_id: UUID,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        return await SupabaseFriendService(settings).accept(user.id, str(relationship_id))
+    except FriendServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.delete("/api/v1/friends/{relationship_id}", status_code=204)
+async def remove_friend(
+    relationship_id: UUID,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        await SupabaseFriendService(settings).remove(user.id, str(relationship_id))
+    except FriendServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
