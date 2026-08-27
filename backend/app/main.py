@@ -1,12 +1,14 @@
 import base64
 import hashlib
+import json
+import logging
 import time
 import io
 import math
 import struct
 import wave
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import (
     Depends,
     FastAPI,
@@ -16,7 +18,7 @@ from fastapi import (
     status,
     Request,
 )
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .adapters import (
@@ -81,6 +83,11 @@ from .trial_access import TrialAccessError, TrialAccessRepository
 
 
 settings = get_settings()
+logger = logging.getLogger("leetally.api")
+MODEL_CAPACITY_MESSAGE = (
+    "Our AI models are running at full capacity right now. "
+    "Please try again in a few minutes."
+)
 
 app = FastAPI(
     title="LeetAlly API",
@@ -118,7 +125,43 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+    request_id = (
+        request.headers.get("x-request-id")
+        or request.headers.get("x-vercel-id")
+        or str(uuid4())
+    )
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as error:
+        logger.exception(json.dumps({
+            "level": "error",
+            "event": "unhandled_request_error",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "error_type": type(error).__name__,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000),
+        }))
+        response = JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Something went wrong. Please try again.",
+                "request_id": request_id,
+            },
+        )
+    if response.status_code >= 400:
+        log = logger.error if response.status_code >= 500 else logger.warning
+        log(json.dumps({
+            "level": "error" if response.status_code >= 500 else "warning",
+            "event": "request_failed",
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000),
+        }))
+    response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -369,7 +412,7 @@ async def create_interview(
         if not trial_available:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Your free AI interview has been used. Activate Beta Monthly to continue interviewing.",
+                detail="Your beta interview allowance has been used. Beta Monthly access will be available after payments launch.",
             )
     interview_data = payload.model_dump()
     interview_data["access_tier"] = access_tier
@@ -514,9 +557,17 @@ async def submit_interview_audio(
         )
 
     except TranscriptionServiceError as error:
+        logger.error(json.dumps({
+            "level": "error",
+            "event": "model_service_unavailable",
+            "service": "transcription",
+            "interview_id": interview_id,
+            "error_type": type(error).__name__,
+            "error": str(error)[:500],
+        }))
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(error),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MODEL_CAPACITY_MESSAGE,
         ) from error
 
     print(
@@ -548,9 +599,17 @@ async def submit_interview_audio(
         )
 
     except AIServiceError as error:
+        logger.error(json.dumps({
+            "level": "error",
+            "event": "model_service_unavailable",
+            "service": "interviewer",
+            "interview_id": interview_id,
+            "error_type": type(error).__name__,
+            "error": str(error)[:500],
+        }))
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(error),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=MODEL_CAPACITY_MESSAGE,
         ) from error
 
     if settings.billing_enabled and interview.access_tier == "beta_monthly":
@@ -587,6 +646,7 @@ async def submit_interview_audio(
 
     interviewer_audio_base64: str | None = None
     interviewer_audio_content_type: str | None = None
+    service_notice: str | None = None
 
     speech_started_at = time.perf_counter()
     try:
@@ -600,15 +660,16 @@ async def submit_interview_audio(
 
     except SpeechServiceError as error:
         # Continue with text if Fish Audio is temporarily unavailable.
-        print(
-            "Fish Audio synthesis failed:",
-            {
+        service_notice = MODEL_CAPACITY_MESSAGE
+        logger.error(json.dumps({
+                "level": "error",
+                "event": "model_service_unavailable",
+                "service": "speech",
                 "interview_id": interview_id,
-                "error": str(error),
+                "error_type": type(error).__name__,
+                "error": str(error)[:500],
                 "elapsed_seconds": round(time.perf_counter() - speech_started_at, 3),
-            },
-            flush=True,
-        )
+        }))
 
     else:
         interviewer_audio_base64 = base64.b64encode(
@@ -661,6 +722,7 @@ async def submit_interview_audio(
         interviewer_audio_content_type=(
             interviewer_audio_content_type
         ),
+        service_notice=service_notice,
         phase=interview.phase,
     )
 

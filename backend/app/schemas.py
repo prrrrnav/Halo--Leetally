@@ -120,6 +120,7 @@ class InterviewTurnOut(BaseModel):
     interviewer_message: str
     interviewer_audio_base64: str | None = None
     interviewer_audio_content_type: str | None = None
+    service_notice: str | None = None
     phase: Literal["clarification", "approach", "coding", "testing", "complexity", "wrap_up"] = "clarification"
 
 

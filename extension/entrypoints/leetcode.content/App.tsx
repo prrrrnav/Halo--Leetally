@@ -913,13 +913,16 @@ export default function App() {
       setConversationOpen(true);
       setCandidateStatus("listening");
 
+      if (result.service_notice) {
+        setError(result.service_notice);
+      }
+
       if (
         !result.interviewer_audio_base64 ||
         !result.interviewer_audio_content_type
       ) {
-        throw new Error(
-          "Fish Audio returned no playable audio. Check the FastAPI terminal for the Fish synthesis log.",
-        );
+        processingRef.current = false;
+        return;
       }
 
       processingRef.current = false;

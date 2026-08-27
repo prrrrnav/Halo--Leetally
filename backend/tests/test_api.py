@@ -24,8 +24,8 @@ from app.dependencies import (
 )
 from app.domain import SynthesizedSpeech
 from app.friends import SupabaseFriendService
-from app.adapters import GroqAIProvider
-from app.main import _advance_sde1_phase, _inspect_pcm_wav, app, settings
+from app.adapters import AIServiceError, GroqAIProvider, SpeechServiceError
+from app.main import MODEL_CAPACITY_MESSAGE, _advance_sde1_phase, _inspect_pcm_wav, app, settings
 from app.dependencies import billing_repository, repository, trial_access_repository
 from app.voice_profiles import COMPANY_VOICE_PROFILES, company_voice_reference
 
@@ -125,7 +125,7 @@ def test_create_and_read_interview():
     assert client.get(f"/api/v1/interviews/{interview_id}", headers={"Authorization":"Bearer another-user"}).status_code == 404
 
 
-def test_each_account_can_start_only_one_ai_interview():
+def test_each_account_can_start_up_to_beta_interview_limit():
     payload = {"platform":"leetcode","problem_slug":"two-sum","problem_title":"Two Sum","difficulty":"easy"}
     first = client.post("/api/v1/interviews", headers=headers, json=payload)
     second = client.post("/api/v1/interviews", headers=headers, json=payload)
@@ -136,8 +136,11 @@ def test_each_account_can_start_only_one_ai_interview():
     )
 
     assert first.status_code == 201
-    assert second.status_code == 402
-    assert second.json()["detail"] == "Your free AI interview has been used. Activate Beta Monthly to continue interviewing."
+    assert second.status_code == 201
+
+    exhausted = client.post("/api/v1/interviews", json=payload, headers=headers)
+    assert exhausted.status_code == 402
+    assert exhausted.json()["detail"] == "Your beta interview allowance has been used. Beta Monthly access will be available after payments launch."
     assert another_user.status_code == 201
 
 
@@ -456,6 +459,73 @@ def test_audio_turn_transcribes_before_advancing_interview_phase():
     assert response.json()["interviewer_message"] == "Yes. Now explain your approach."
     assert response.json()["interviewer_audio_content_type"] == "audio/mpeg"
     assert base64.b64decode(response.json()["interviewer_audio_base64"]) == b"voice"
+
+
+def test_model_outage_returns_capacity_message():
+    class StubTranscriptionProvider:
+        async def transcribe(self, audio_bytes, content_type):
+            return "I would use a hash map."
+
+    class UnavailableAIProvider:
+        async def reply(self, interview, candidate_message):
+            raise AIServiceError("provider unavailable")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_transcription_provider] = StubTranscriptionProvider
+    app.dependency_overrides[get_ai_provider] = UnavailableAIProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio",
+            headers=headers,
+            files={"audio": ("candidate.wav", _pcm_wav(0.75, 4000), "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_transcription_provider, None)
+        app.dependency_overrides.pop(get_ai_provider, None)
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == MODEL_CAPACITY_MESSAGE
+    assert response.headers["x-request-id"]
+
+
+def test_speech_outage_keeps_text_interview_running_with_notice():
+    class StubTranscriptionProvider:
+        async def transcribe(self, audio_bytes, content_type):
+            return "I would use a hash map."
+
+    class StubAIProvider:
+        async def reply(self, interview, candidate_message):
+            return "Explain the time complexity."
+
+    class UnavailableSpeechProvider:
+        async def synthesize(self, text, reference_id=None):
+            raise SpeechServiceError("provider unavailable")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_transcription_provider] = StubTranscriptionProvider
+    app.dependency_overrides[get_ai_provider] = StubAIProvider
+    app.dependency_overrides[get_speech_provider] = UnavailableSpeechProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio",
+            headers=headers,
+            files={"audio": ("candidate.wav", _pcm_wav(0.75, 4000), "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_transcription_provider, None)
+        app.dependency_overrides.pop(get_ai_provider, None)
+        app.dependency_overrides.pop(get_speech_provider, None)
+
+    assert response.status_code == 200
+    assert response.json()["interviewer_message"] == "Explain the time complexity."
+    assert response.json()["service_notice"] == MODEL_CAPACITY_MESSAGE
+    assert response.json()["interviewer_audio_base64"] is None
 
 
 def test_sde1_phases_advance_from_observable_evidence():

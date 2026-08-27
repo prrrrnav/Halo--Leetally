@@ -32,6 +32,8 @@ export interface InterviewTurnResponse {
   interviewer_audio_base64?: string | null;
   /** MIME type of the audio, e.g. "audio/mpeg". */
   interviewer_audio_content_type?: string | null;
+  /** Temporary provider-capacity notice; the text interview can continue. */
+  service_notice?: string | null;
   phase: InterviewPhase;
 }
 
