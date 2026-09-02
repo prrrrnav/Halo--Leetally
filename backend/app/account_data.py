@@ -52,11 +52,12 @@ class SupabaseAccountDataService:
         self,
         table: str,
         params: dict[str, str],
+        select: str = "*",
     ) -> list[dict[str, Any]]:
         response = await self._request(
             "GET",
             f"{self.rest_url}/{table}",
-            params={**params, "select": "*"},
+            params={**params, "select": select},
         )
         return response.json()
 
@@ -92,6 +93,14 @@ class SupabaseAccountDataService:
             "interviews": interviews,
             "interview_messages": messages,
             "interview_feedback": feedback,
+            "interview_memories": await self._rows(
+                "interview_memories",
+                {"user_id": f"eq.{user_id}"},
+                select=(
+                    "id,interview_id,memory_type,summary,metadata,"
+                    "created_at,updated_at"
+                ),
+            ),
             "usage_events": await self._rows("usage_events", {"user_id": f"eq.{user_id}"}),
             "trial_usage": await self._rows("ai_interview_usage", {"user_id": f"eq.{user_id}"}),
             "billing_checkouts": checkouts,
@@ -136,5 +145,5 @@ class SupabaseAccountDataService:
                 params={"user_id": f"eq.{user_id}"},
             )
         # Foreign-key cascades remove profiles, interviews, messages, feedback,
-        # progress, trial usage and ordinary usage events.
+        # progress, personal memories, trial usage and ordinary usage events.
         await self._request("DELETE", f"{self.auth_url}/{user_id}")

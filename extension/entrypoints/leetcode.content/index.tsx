@@ -6,10 +6,7 @@ import { CompanyInterviewIndicator } from "./CompanyInterviewIndicator";
 import "./style.css";
 
 export default defineContentScript({
-  matches: [
-    "*://leetcode.com/problems/*",
-    "*://www.leetcode.com/problems/*",
-  ],
+  matches: ["*://leetcode.com/problems/*", "*://www.leetcode.com/problems/*"],
   cssInjectionMode: "ui",
 
   async main(ctx) {

@@ -1,4 +1,7 @@
 from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+import json
+import logging
 import time
 from typing import Any
 from uuid import uuid4
@@ -21,6 +24,9 @@ from .domain import (
     SynthesizedSpeech,
 )
 from .voice_profiles import company_interview_style
+
+
+logger = logging.getLogger("leetally.adapters")
 
 
 # =========================================================
@@ -68,6 +74,7 @@ class SupabaseAuthProvider(AuthProvider):
 
         self._supabase_url = settings.supabase_url.rstrip("/")
         self._anon_key = settings.supabase_anon_key
+        self._app_env = settings.app_env.lower()
 
     async def verify_token(
         self,
@@ -76,7 +83,13 @@ class SupabaseAuthProvider(AuthProvider):
         if not token.strip():
             raise InvalidAccessTokenError("Access token is missing")
 
-        if token in ("test-user", "another-user") or token.startswith("test-"):
+        if (
+            self._app_env != "production"
+            and (
+                token in ("test-user", "another-user")
+                or token.startswith("test-")
+            )
+        ):
             return AuthenticatedUser(
                 id=token,
                 email=f"{token}@example.com",
@@ -271,6 +284,23 @@ class SupabaseInterviewRepository(InterviewRepository):
                 "Interview storage is temporarily unavailable."
             ) from error
         if response.status_code >= 400:
+            postgrest_code: str | None = None
+            try:
+                error_payload = response.json()
+                if isinstance(error_payload, dict):
+                    raw_code = error_payload.get("code")
+                    if isinstance(raw_code, str):
+                        postgrest_code = raw_code
+            except (ValueError, TypeError):
+                pass
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "interview_storage_request_failed",
+                "method": method,
+                "path": path.split("?")[0],
+                "status": response.status_code,
+                "postgrest_code": postgrest_code,
+            }))
             raise InterviewRepositoryError(
                 "Interview storage operation failed."
             )
@@ -346,6 +376,7 @@ class SupabaseInterviewRepository(InterviewRepository):
             assessment=row.get("assessment"),
             phase=row.get("phase", "clarification"),
             code_snapshots=snapshots,
+            personal_memory=row.get("personal_memory") or [],
         )
 
     async def create(
@@ -435,6 +466,7 @@ class SupabaseInterviewRepository(InterviewRepository):
             "problem_title", "problem_description", "difficulty",
             "programming_language", "code", "visible_output",
             "problem_topics", "interview_companies",
+            "personal_memory",
         }
         payload = {key: value for key, value in data.items() if key in allowed and value is not None}
         payload["code_snapshots"] = [
@@ -484,6 +516,8 @@ class SupabaseInterviewRepository(InterviewRepository):
                     "content": interviewer_message,
                     "sequence_number": sequence + 1,
                     "created_at": now,
+                    # PostgREST bulk inserts require identical object keys.
+                    "code": interview.code or "",
                 },
             ],
         )
@@ -837,6 +871,83 @@ class FishAudioSpeechProvider(SpeechProvider):
             ],
         )
 
+
+class ElevenLabsSpeechProvider(SpeechProvider):
+    """Premium interviewer voice backed by ElevenLabs."""
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.elevenlabs_api_key:
+            raise RuntimeError("ELEVENLABS_API_KEY is required")
+        if not settings.elevenlabs_voice_id:
+            raise RuntimeError("ELEVENLABS_VOICE_ID is required")
+
+        self._api_key = settings.elevenlabs_api_key
+        self._voice_id = settings.elevenlabs_voice_id
+        self._model = settings.elevenlabs_model_id
+        self._output_format = settings.elevenlabs_output_format
+        self._url = (
+            "https://api.elevenlabs.io/v1/text-to-speech/"
+            f"{self._voice_id}"
+        )
+
+    async def synthesize(
+        self,
+        text: str,
+        reference_id: str | None = None,
+    ) -> SynthesizedSpeech:
+        del reference_id
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise SpeechServiceError("Cannot synthesize an empty message.")
+
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    self._url,
+                    params={"output_format": self._output_format},
+                    headers={
+                        "xi-api-key": self._api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "audio/mpeg",
+                    },
+                    json={
+                        "text": normalized_text,
+                        "model_id": self._model,
+                        "voice_settings": {
+                            "stability": 0.46,
+                            "similarity_boost": 0.78,
+                            "style": 0.2,
+                            "use_speaker_boost": True,
+                        },
+                    },
+                )
+        except httpx.RequestError as error:
+            raise SpeechServiceError(
+                "ElevenLabs voice service is unavailable."
+            ) from error
+
+        if response.status_code != 200:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "elevenlabs_synthesis_failed",
+                "status": response.status_code,
+                "request_id": response.headers.get("request-id"),
+            }))
+            raise SpeechServiceError(
+                f"ElevenLabs returned status {response.status_code}."
+            )
+
+        if not response.content:
+            raise SpeechServiceError("ElevenLabs returned empty audio.")
+
+        return SynthesizedSpeech(
+            data=response.content,
+            content_type=(
+                response.headers.get("content-type", "audio/mpeg")
+                .split(";")[0]
+            ),
+        )
+
 def build_interviewer_instructions(
     context: InterviewScreenContext,
 ) -> str:
@@ -943,14 +1054,76 @@ def clean_context_text(
 
 class GroqAIProvider(AIProvider):
     def __init__(self, settings: Settings) -> None:
-        if not settings.groq_api_key:
-            raise RuntimeError("GROQ_API_KEY is required")
+        if not settings.groq_api_key and not settings.openai_api_key:
+            raise RuntimeError("GROQ_API_KEY or OPENAI_API_KEY is required")
 
         self._api_key = settings.groq_api_key
         self._model = settings.groq_model
         self._base_url = (
             "https://api.groq.com/openai/v1/chat/completions"
         )
+        self._openai_api_key = settings.openai_api_key
+        self._openai_model = settings.openai_chat_model
+        self._openai_url = "https://api.openai.com/v1/responses"
+
+    async def _openai_reply(
+        self,
+        interview: Interview,
+        candidate_message: str,
+    ) -> str:
+        if not self._openai_api_key:
+            raise AIServiceError("OpenAI interviewer fallback is not configured.")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    self._openai_url,
+                    headers={
+                        "Authorization": f"Bearer {self._openai_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._openai_model,
+                        "instructions": self._build_system_prompt(interview),
+                        "input": candidate_message,
+                        "max_output_tokens": 160,
+                    },
+                )
+        except httpx.RequestError as error:
+            raise AIServiceError(
+                "OpenAI interviewer fallback is unavailable."
+            ) from error
+
+        if response.status_code != 200:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "openai_interviewer_failed",
+                "status": response.status_code,
+                "request_id": response.headers.get("x-request-id"),
+            }))
+            raise AIServiceError(
+                f"OpenAI returned status {response.status_code}."
+            )
+
+        data: dict[str, Any] = response.json()
+        output_text = data.get("output_text")
+        if not isinstance(output_text, str):
+            parts: list[str] = []
+            for output in data.get("output", []):
+                if not isinstance(output, dict):
+                    continue
+                for content in output.get("content", []):
+                    if (
+                        isinstance(content, dict)
+                        and content.get("type") == "output_text"
+                        and isinstance(content.get("text"), str)
+                    ):
+                        parts.append(content["text"])
+            output_text = "".join(parts)
+
+        if not output_text.strip():
+            raise AIServiceError("OpenAI returned an empty interviewer message.")
+        return output_text.strip()
 
     async def reply(
         self,
@@ -959,6 +1132,9 @@ class GroqAIProvider(AIProvider):
     ) -> str:
         if not candidate_message.strip():
             return "Please repeat your response."
+
+        if not self._api_key:
+            return await self._openai_reply(interview, candidate_message)
 
         system_prompt = self._build_system_prompt(interview)
 
@@ -991,16 +1167,16 @@ class GroqAIProvider(AIProvider):
                     json=payload,
                 )
 
-        except httpx.RequestError as error:
-            raise AIServiceError(
-                "Groq interviewer service is unavailable."
-            ) from error
+        except httpx.RequestError:
+            return await self._openai_reply(interview, candidate_message)
 
         if response.status_code != 200:
-            raise AIServiceError(
-                f"Groq returned {response.status_code}: "
-                f"{response.text[:500]}"
-            )
+            logger.warning(json.dumps({
+                "level": "warning",
+                "event": "groq_interviewer_fallback",
+                "status": response.status_code,
+            }))
+            return await self._openai_reply(interview, candidate_message)
 
         data: dict[str, Any] = response.json()
 
@@ -1025,6 +1201,87 @@ class GroqAIProvider(AIProvider):
             )
 
         return message.strip()
+
+    async def stream_reply(
+        self,
+        interview: Interview,
+        candidate_message: str,
+    ) -> AsyncIterator[str]:
+        """Yield interviewer text as Groq emits it.
+
+        The public interview API consumes this iterator and translates the
+        provider stream into our own authenticated SSE contract. Provider
+        payloads and errors are never forwarded to the browser.
+        """
+        if not candidate_message.strip():
+            yield "Please repeat your response."
+            return
+
+        if not self._api_key:
+            yield await self._openai_reply(interview, candidate_message)
+            return
+
+        payload = {
+            "model": self._model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": self._build_system_prompt(interview),
+                },
+                {
+                    "role": "user",
+                    "content": candidate_message,
+                },
+            ],
+            "temperature": 0.4,
+            "max_tokens": 80,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                async with client.stream(
+                    "POST",
+                    self._base_url,
+                    headers=headers,
+                    json=payload,
+                ) as response:
+                    if response.status_code != 200:
+                        logger.warning(json.dumps({
+                            "level": "warning",
+                            "event": "groq_interviewer_fallback",
+                            "status": response.status_code,
+                        }))
+                        yield await self._openai_reply(
+                            interview,
+                            candidate_message,
+                        )
+                        return
+
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        raw_data = line[5:].strip()
+                        if not raw_data:
+                            continue
+                        if raw_data == "[DONE]":
+                            break
+                        try:
+                            data: dict[str, Any] = json.loads(raw_data)
+                            content = data["choices"][0]["delta"].get("content")
+                        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as error:
+                            raise AIServiceError(
+                                "Groq returned an unexpected stream response."
+                            ) from error
+                        if isinstance(content, str) and content:
+                            yield content
+
+        except httpx.RequestError:
+            yield await self._openai_reply(interview, candidate_message)
 
     def _build_system_prompt(
         self,
@@ -1110,6 +1367,11 @@ class GroqAIProvider(AIProvider):
             f"Candidate: {turn.candidate_message}\nInterviewer: {turn.interviewer_message}"
             for turn in interview.turns[-6:]
         )
+        personal_memory = "\n".join(
+            f"- {clean_context_text(summary, maximum_length=2000)}"
+            for summary in interview.personal_memory[:3]
+            if summary
+        )
         dsa_phase_guidance = {
             "clarification": "Ask the candidate to clarify constraints, inputs, outputs, and assumptions.",
             "approach": "Require an ordered approach and justification before substantial coding.",
@@ -1194,6 +1456,11 @@ Visible output:
 
 Recent conversation:
 {conversation_history or "No previous turns"}
+
+Relevant memories from this candidate's previous interviews:
+{personal_memory or "No relevant prior memory"}
+Use these memories only to personalize pacing and follow-up questions. Treat
+them as historical practice signals, not as proof about the current answer.
 """.strip()
 
 

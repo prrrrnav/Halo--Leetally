@@ -17,6 +17,7 @@ export type BillingEntitlement = {
   plan_id?: string;
   plan_name?: string;
   status: "none" | "active" | "past_due" | "cancelled" | "expired";
+  is_lifetime: boolean;
   auto_renew: boolean;
   minutes_limit: number;
   minutes_used: number;

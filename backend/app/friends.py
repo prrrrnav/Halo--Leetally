@@ -76,6 +76,7 @@ class SupabaseFriendService:
             "username": profile.get("username"),
             "avatar": profile.get("avatar"),
             "ranking": profile.get("ranking"),
+            "streak": int(profile.get("streak") or 0),
             "total_solved": int(profile.get("totalSolved") or 0),
             "easy_solved": int(profile.get("easySolved") or 0),
             "medium_solved": int(profile.get("mediumSolved") or 0),

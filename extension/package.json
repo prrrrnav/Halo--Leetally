@@ -1,8 +1,8 @@
 {
   "name": "leetally-extension",
-  "description": "LeetAlly AI interview practice and preparation tracker for LeetCode.",
+  "description": "LeetCode tracker and helper to visualize progress, build consistency, follow friends, and practice AI interviews.",
   "private": true,
-  "version": "0.1.3",
+  "version": "0.1.18",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -13,6 +13,8 @@
     "zip:firefox": "wxt zip -b firefox",
     "test": "node --test tests/*.test.mjs",
     "compile": "tsc --noEmit",
+    "format": "prettier --ignore-path ../.prettierignore --write .",
+    "format:check": "prettier --ignore-path ../.prettierignore --check .",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@wxt-dev/module-react": "^1.1.5",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.3",
     "wxt": "^0.20.27"
   }

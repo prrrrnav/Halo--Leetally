@@ -2,19 +2,23 @@ import { browser } from "wxt/browser";
 import { supabase } from "./supabase";
 
 export const POLICY_VERSION = "2026-08-17";
-const WEBSITE_URL = ((import.meta.env.VITE_WEBSITE_URL as string | undefined) || "https://leetally-web.vercel.app").replace(/\/$/, "");
+const WEBSITE_URL = (
+  (import.meta.env.VITE_WEBSITE_URL as string | undefined) || "https://leetally-web.vercel.app"
+).replace(/\/$/, "");
 
 export function googleOAuthRedirectUrl(): string {
   return browser.identity.getRedirectURL("auth/callback");
 }
 
 export async function signInWithGoogle(): Promise<void> {
-  const response = await browser.runtime.sendMessage({ type: "LEETALLY_GOOGLE_SIGN_IN" }) as { ok: boolean; error?: string } | undefined;
+  const response = (await browser.runtime.sendMessage({ type: "LEETALLY_GOOGLE_SIGN_IN" })) as
+    { ok: boolean; error?: string } | undefined;
   if (!response?.ok) throw new Error(response?.error ?? "Google sign-in did not complete.");
 }
 
 export async function syncWebsiteSession(interactive = true): Promise<boolean> {
-  const response = await browser.runtime.sendMessage({ type: "LEETALLY_WEBSITE_SIGN_IN", interactive }) as { ok: boolean; error?: string } | undefined;
+  const response = (await browser.runtime.sendMessage({ type: "LEETALLY_WEBSITE_SIGN_IN", interactive })) as
+    { ok: boolean; error?: string } | undefined;
   if (response?.ok) return true;
   if (interactive) throw new Error(response?.error ?? "Website login did not complete.");
   return false;
@@ -43,6 +47,9 @@ export async function signUpWithEmail(email: string, password: string): Promise<
   if (!data.session && data.user && data.user.identities?.length === 0) {
     throw new Error("An account with this email already exists. Sign in instead.");
   }
+  if (data.session) {
+    await browser.storage.local.set({ "leetally-policy-acceptance": POLICY_VERSION });
+  }
   return !data.session;
 }
 
@@ -52,6 +59,15 @@ export async function signOutOfExtension(): Promise<void> {
 }
 
 export async function recordPolicyAcceptance(): Promise<void> {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError) throw userError;
+  if (user?.user_metadata?.policy_accepted_at) {
+    await browser.storage.local.set({ "leetally-policy-acceptance": POLICY_VERSION });
+    return;
+  }
   const { error } = await supabase.auth.updateUser({
     data: {
       policy_version: POLICY_VERSION,
@@ -66,4 +82,5 @@ export async function sendPasswordReset(email: string): Promise<void> {
     redirectTo: `${WEBSITE_URL}/login?recovery=1`,
   });
   if (error) throw error;
+  await browser.storage.local.set({ "leetally-policy-acceptance": POLICY_VERSION });
 }

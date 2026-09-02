@@ -8,7 +8,7 @@ import struct
 import time
 import wave
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.billing import (
@@ -22,11 +22,24 @@ from app.dependencies import (
     get_speech_provider,
     get_transcription_provider,
 )
-from app.domain import SynthesizedSpeech
+from app.domain import AuthenticatedUser, SynthesizedSpeech
+from app.feedback import FeedbackServiceError, SupabaseFeedbackService
 from app.friends import SupabaseFriendService
-from app.adapters import AIServiceError, GroqAIProvider, SpeechServiceError
+from app.adapters import (
+    AIServiceError,
+    GroqAIProvider,
+    InvalidAccessTokenError,
+    SpeechServiceError,
+    SupabaseAuthProvider,
+)
+from app.config import Settings
 from app.main import MODEL_CAPACITY_MESSAGE, _advance_sde1_phase, _inspect_pcm_wav, app, settings
-from app.dependencies import billing_repository, repository, trial_access_repository
+from app.dependencies import (
+    billing_repository,
+    memory_service,
+    repository,
+    trial_access_repository,
+)
 from app.voice_profiles import COMPANY_VOICE_PROFILES, company_voice_reference
 
 client = TestClient(app)
@@ -40,12 +53,14 @@ def reset_in_memory_state():
     billing_repository.checkouts.clear()
     billing_repository.entitlements.clear()
     billing_repository.events.clear()
+    memory_service.items.clear()
     yield
     repository.items.clear()
     trial_access_repository.usage.clear()
     billing_repository.checkouts.clear()
     billing_repository.entitlements.clear()
     billing_repository.events.clear()
+    memory_service.items.clear()
 
 def test_health():
     assert client.get("/api/v1/health").json()["status"] == "ok"
@@ -55,6 +70,84 @@ def test_health():
 
 def test_auth_required():
     assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_feedback_inbox_is_server_gated_to_owner_email():
+    service = SupabaseFeedbackService(Settings(
+        supabase_url="https://example.supabase.co",
+        supabase_anon_key="anon",
+        supabase_service_role_key="service-role",
+        openai_api_key="test",
+        feedback_admin_email="watershaper9.1@gmail.com",
+    ))
+    with pytest.raises(FeedbackServiceError) as blocked:
+        asyncio.run(service.owner_list(AuthenticatedUser(
+            id="not-owner",
+            email="someone@example.com",
+        )))
+    assert blocked.value.status_code == 403
+
+
+def test_production_auth_never_accepts_test_bearer_tokens(monkeypatch):
+    class RejectingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, *args, **kwargs):
+            return type("Response", (), {"status_code": 401})()
+
+    monkeypatch.setattr("app.adapters.httpx.AsyncClient", RejectingClient)
+    provider = SupabaseAuthProvider(Settings(
+        app_env="production",
+        supabase_url="https://example.supabase.co",
+        supabase_anon_key="anon",
+        openai_api_key="test",
+    ))
+    with pytest.raises(InvalidAccessTokenError):
+        asyncio.run(provider.verify_token("test-user"))
+
+
+def test_voice_provider_catalog_keeps_premium_voice_entitlement_gated():
+    response = client.get("/api/v1/voice/providers", headers=headers)
+    assert response.status_code == 200
+    providers = {item["id"]: item for item in response.json()["providers"]}
+    assert providers["fish"]["requires_paid"] is False
+    assert providers["elevenlabs"]["requires_paid"] is True
+    assert providers["elevenlabs"]["available"] is False
+
+
+def test_trial_user_cannot_forge_elevenlabs_voice_request():
+    class StubSpeechProvider:
+        async def synthesize(self, text, reference_id=None):
+            return SynthesizedSpeech(data=b"audio", content_type="audio/mpeg")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode",
+        "problem_slug": "two-sum",
+        "problem_title": "Two Sum",
+        "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_speech_provider] = StubSpeechProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio/stream",
+            headers=headers,
+            data={"voice_provider": "elevenlabs"},
+            files={"audio": ("candidate.wav", b"RIFF", "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_speech_provider, None)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "ElevenLabs voice requires an active paid plan."
+    )
 
 
 def test_account_data_operations_require_server_configuration():
@@ -90,6 +183,7 @@ def test_friend_progress_response_exposes_only_sanitized_profile_totals():
                 "username": "friend-user",
                 "avatar": "https://example.com/avatar.png",
                 "ranking": 42,
+                "streak": 13,
                 "totalSolved": 136,
                 "easySolved": 88,
                 "mediumSolved": 47,
@@ -106,6 +200,7 @@ def test_friend_progress_response_exposes_only_sanitized_profile_totals():
         "username": "friend-user",
         "avatar": "https://example.com/avatar.png",
         "ranking": 42,
+        "streak": 13,
         "total_solved": 136,
         "easy_solved": 88,
         "medium_solved": 47,
@@ -166,6 +261,61 @@ def test_company_interview_history_reaches_the_ai_prompt():
     assert "Do not present it as verified private company data" in prompt
 
 
+def test_groq_failure_falls_back_to_openai_interviewer(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {"x-request-id": "sanitized-test-id"}
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, **kwargs):
+            if "groq.com" in url:
+                return FakeResponse(404, {})
+            return FakeResponse(200, {
+                "output": [{
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Why is a hash map the right trade-off here?",
+                    }],
+                }],
+            })
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode",
+        "problem_slug": "two-sum",
+        "problem_title": "Two Sum",
+        "difficulty": "easy",
+    }).json()
+    provider = object.__new__(GroqAIProvider)
+    provider._api_key = "groq-test"
+    provider._model = "groq-test-model"
+    provider._base_url = "https://api.groq.com/openai/v1/chat/completions"
+    provider._openai_api_key = "openai-test"
+    provider._openai_model = "gpt-test"
+    provider._openai_url = "https://api.openai.com/v1/responses"
+    monkeypatch.setattr("app.adapters.httpx.AsyncClient", FakeClient)
+
+    reply = asyncio.run(provider.reply(
+        repository.items[created["id"]],
+        "I will use a hash map.",
+    ))
+    assert reply == "Why is a hash map the right trade-off here?"
+
+
 def test_complete_interview_returns_evidence_backed_sde1_scorecard():
     created = client.post("/api/v1/interviews", headers=headers, json={
         "platform": "leetcode",
@@ -212,6 +362,41 @@ def test_complete_interview_returns_evidence_backed_sde1_scorecard():
         headers=headers,
         files={"audio": ("candidate.wav", b"RIFF", "audio/wav")},
     ).status_code == 409
+
+
+def test_completed_scorecard_becomes_private_personal_interview_memory():
+    first = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode",
+        "problem_slug": "two-sum",
+        "problem_title": "Two Sum",
+        "difficulty": "easy",
+        "target_company": "google",
+        "level": "sde1",
+    }).json()
+    completed = client.post(
+        f"/api/v1/interviews/{first['id']}/complete",
+        headers=headers,
+        json={"duration_seconds": 300},
+    )
+    assert completed.status_code == 200
+    assert len(memory_service.items["test-user"]) == 1
+    assert "Two Sum" in memory_service.items["test-user"][0][1]
+
+    second = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode",
+        "problem_slug": "three-sum",
+        "problem_title": "3Sum",
+        "difficulty": "medium",
+        "target_company": "google",
+        "level": "sde1",
+    }).json()
+    next_interview = repository.items[second["id"]]
+    next_interview.personal_memory = asyncio.run(
+        memory_service.relevant("test-user", next_interview)
+    )
+    prompt = GroqAIProvider(settings)._build_system_prompt(next_interview)
+    assert "Relevant memories from this candidate" in prompt
+    assert "Previous dsa interview on Two Sum" in prompt
 
 
 def test_cannot_complete_another_users_interview():
@@ -461,6 +646,100 @@ def test_audio_turn_transcribes_before_advancing_interview_phase():
     assert base64.b64decode(response.json()["interviewer_audio_base64"]) == b"voice"
 
 
+def test_audio_turn_streams_transcript_reply_and_voice_in_order():
+    class StubTranscriptionProvider:
+        async def transcribe(self, audio_bytes, content_type):
+            return "I would use a hash map."
+
+    class StreamingAIProvider:
+        async def stream_reply(self, interview, candidate_message):
+            yield "Explain "
+            yield "the complexity."
+
+        async def reply(self, interview, candidate_message):
+            raise AssertionError("The streaming path should be used.")
+
+    class StubSpeechProvider:
+        async def synthesize(self, text, reference_id=None):
+            assert text == "Explain the complexity."
+            return SynthesizedSpeech(data=b"streamed-voice", content_type="audio/mpeg")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_transcription_provider] = StubTranscriptionProvider
+    app.dependency_overrides[get_ai_provider] = StreamingAIProvider
+    app.dependency_overrides[get_speech_provider] = StubSpeechProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio/stream",
+            headers=headers,
+            files={"audio": ("candidate.wav", _pcm_wav(0.75, 4000), "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_transcription_provider, None)
+        app.dependency_overrides.pop(get_ai_provider, None)
+        app.dependency_overrides.pop(get_speech_provider, None)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text.index("event: transcript") < response.text.index("event: assistant_delta")
+    assert response.text.index("event: assistant_delta") < response.text.index("event: audio")
+    assert 'data: {"text":"Explain "}' in response.text
+    assert 'data: {"text":"the complexity."}' in response.text
+    assert base64.b64encode(b"streamed-voice").decode("ascii") in response.text
+    assert response.text.rstrip().endswith(
+        'data: {"phase":"clarification","service_notice":null}'
+    )
+    saved = repository.items[created["id"]]
+    assert len(saved.turns) == 1
+    assert saved.turns[0].candidate_message == "I would use a hash map."
+    assert saved.turns[0].interviewer_message == "Explain the complexity."
+
+
+def test_audio_turn_stream_uses_safe_fallback_when_model_is_unavailable():
+    class StubTranscriptionProvider:
+        async def transcribe(self, audio_bytes, content_type):
+            return "My internal answer should not appear in logs or errors."
+
+    class UnavailableStreamingAIProvider:
+        async def stream_reply(self, interview, candidate_message):
+            if False:
+                yield ""
+            raise AIServiceError("provider response contained sensitive diagnostics")
+
+        async def reply(self, interview, candidate_message):
+            raise AssertionError("The streaming path should be used.")
+
+    created = client.post("/api/v1/interviews", headers=headers, json={
+        "platform": "leetcode", "problem_slug": "two-sum",
+        "problem_title": "Two Sum", "difficulty": "easy",
+    }).json()
+    app.dependency_overrides[get_transcription_provider] = StubTranscriptionProvider
+    app.dependency_overrides[get_ai_provider] = UnavailableStreamingAIProvider
+    try:
+        response = client.post(
+            f"/api/v1/interviews/{created['id']}/turns/audio/stream",
+            headers=headers,
+            files={"audio": ("candidate.wav", _pcm_wav(0.75, 4000), "audio/wav")},
+        )
+    finally:
+        app.dependency_overrides.pop(get_transcription_provider, None)
+        app.dependency_overrides.pop(get_ai_provider, None)
+
+    assert response.status_code == 200
+    assert "event: notice" in response.text
+    assert MODEL_CAPACITY_MESSAGE in response.text
+    assert "sensitive diagnostics" not in response.text
+    assert "event: assistant_delta" in response.text
+    assert "Please restate the key constraints" in response.text
+    saved = repository.items[created["id"]]
+    assert len(saved.turns) == 1
+    assert saved.turns[0].candidate_message == "My internal answer should not appear in logs or errors."
+    assert saved.turns[0].interviewer_message.startswith("Please restate the key constraints")
+
+
 def test_model_outage_returns_capacity_message():
     class StubTranscriptionProvider:
         async def transcribe(self, audio_bytes, content_type):
@@ -563,6 +842,70 @@ def test_speech_usage_accumulates_seconds_and_deduplicates_retries():
         assert entitlement.speech_seconds_used == 21
         assert entitlement.minutes_used == 1
     asyncio.run(scenario())
+
+
+def test_lifetime_entitlement_has_no_speech_cap():
+    async def scenario():
+        repository = InMemoryBillingRepository()
+        now = datetime.now(timezone.utc)
+        repository.entitlements["founder"] = BillingEntitlement(
+            user_id="founder",
+            plan_id="lifetime",
+            status="active",
+            is_lifetime=True,
+            minutes_limit=0,
+            minutes_used=0,
+            speech_seconds_used=0,
+            period_start=now,
+            period_end=now + timedelta(days=36_500),
+        )
+        remaining = await repository.consume_speech_seconds(
+            "founder", "long-turn", "interview", 100_000,
+        )
+        duplicate = await repository.consume_speech_seconds(
+            "founder", "long-turn", "interview", 100_000,
+        )
+        entitlement = await repository.get_entitlement("founder")
+        assert entitlement is not None
+        assert remaining == duplicate == 2_147_483_647
+        assert entitlement.speech_seconds_used == 100_000
+        public = entitlement.public_dict()
+        assert public["plan_name"] == "LeetAlly Unlimited"
+        assert public["is_lifetime"] is True
+        assert public["usage_percent"] == 0
+        assert "company_specific_interviews" in public["features"]
+    asyncio.run(scenario())
+
+
+def test_server_allowlisted_account_gets_unlimited_access():
+    original = settings.unlimited_access_emails
+    settings.unlimited_access_emails = " TEST-USER@example.com "
+    try:
+        entitlement = client.get("/api/v1/billing/me", headers=headers)
+        assert entitlement.status_code == 200
+        payload = entitlement.json()
+        assert payload["status"] == "active"
+        assert payload["plan_id"] == "lifetime"
+        assert payload["plan_name"] == "LeetAlly Unlimited"
+        assert payload["is_lifetime"] is True
+
+        first = client.post("/api/v1/interviews", headers=headers, json={
+            "platform": "leetcode", "problem_slug": "two-sum",
+            "problem_title": "Two Sum", "difficulty": "easy",
+        })
+        second = client.post("/api/v1/interviews", headers=headers, json={
+            "platform": "leetcode", "problem_slug": "three-sum",
+            "problem_title": "Three Sum", "difficulty": "medium",
+        })
+        third = client.post("/api/v1/interviews", headers=headers, json={
+            "platform": "leetcode", "problem_slug": "four-sum",
+            "problem_title": "Four Sum", "difficulty": "medium",
+        })
+        assert [first.status_code, second.status_code, third.status_code] == [201, 201, 201]
+        assert all(response.json()["access_tier"] == "beta_monthly" for response in (first, second, third))
+        assert trial_access_repository.usage == {}
+    finally:
+        settings.unlimited_access_emails = original
 
 
 def test_verified_renewal_adds_a_full_period_without_shortening_paid_access():

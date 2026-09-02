@@ -34,11 +34,17 @@ from .trial_access import (
     SupabaseTrialAccessRepository,
     TrialAccessRepository,
 )
+from .memory import (
+    InMemoryInterviewMemoryService,
+    InterviewMemoryService,
+    SupabaseInterviewMemoryService,
+)
 
 
 repository = InMemoryInterviewRepository()
 billing_repository = InMemoryBillingRepository()
 trial_access_repository = InMemoryTrialAccessRepository()
+memory_service = InMemoryInterviewMemoryService()
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -143,3 +149,14 @@ def get_cashfree_client(
     settings: Settings = Depends(get_settings),
 ) -> CashfreeClient:
     return CashfreeClient(settings)
+
+
+def get_memory_service(
+    settings: Settings = Depends(get_settings),
+) -> InterviewMemoryService:
+    if (
+        settings.personal_memory_enabled
+        and settings.supabase_service_role_key
+    ):
+        return SupabaseInterviewMemoryService(settings)
+    return memory_service

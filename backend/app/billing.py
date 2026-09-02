@@ -91,15 +91,29 @@ class BillingEntitlement:
 
     def public_dict(self) -> dict[str, Any]:
         plan = PLANS.get(self.plan_id)
-        remaining_seconds = max(0, self.minutes_limit * 60 - self.speech_seconds_used)
+        remaining_seconds = (
+            0
+            if self.is_lifetime
+            else max(0, self.minutes_limit * 60 - self.speech_seconds_used)
+        )
+        plan_name = (
+            "LeetAlly Unlimited"
+            if self.is_lifetime
+            else plan.name if plan else self.plan_id
+        )
+        features = plan.features if plan else PLANS["beta_monthly"].features
         return {
             "plan_id": self.plan_id,
-            "plan_name": plan.name if plan else self.plan_id,
+            "plan_name": plan_name,
             "status": self.status,
             "is_lifetime": self.is_lifetime,
             "minutes_limit": self.minutes_limit,
             "minutes_used": self.minutes_used,
-            "minutes_remaining": max(0, self.minutes_limit - self.minutes_used),
+            "minutes_remaining": (
+                0
+                if self.is_lifetime
+                else max(0, self.minutes_limit - self.minutes_used)
+            ),
             "speech_seconds_used": self.speech_seconds_used,
             "speech_seconds_remaining": remaining_seconds,
             "usage_percent": (
@@ -109,7 +123,7 @@ class BillingEntitlement:
             "auto_renew": self.auto_renew,
             "period_start": self.period_start,
             "period_end": self.period_end,
-            "features": list(plan.features) if plan else [],
+            "features": list(features),
         }
 
 
@@ -198,6 +212,14 @@ class InMemoryBillingRepository:
         entitlement = self.entitlements.get(user_id)
         if entitlement is None or entitlement.status != "active":
             raise BillingProviderError("No active interview entitlement.")
+        if entitlement.is_lifetime:
+            if event_id not in self.events:
+                self.events.add(event_id)
+                entitlement.speech_seconds_used += max(0, seconds)
+                entitlement.minutes_used = (
+                    entitlement.speech_seconds_used + 59
+                ) // 60
+            return 2_147_483_647
         if event_id in self.events:
             return max(0, entitlement.minutes_limit * 60 - entitlement.speech_seconds_used)
         next_seconds = entitlement.speech_seconds_used + max(0, seconds)

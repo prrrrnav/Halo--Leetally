@@ -1,4 +1,5 @@
 import base64
+import asyncio
 import hashlib
 import json
 import logging
@@ -7,31 +8,36 @@ import io
 import math
 import struct
 import wave
-from datetime import datetime, timezone
+from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from fastapi import (
     Depends,
     FastAPI,
     File,
+    Form,
     HTTPException,
     UploadFile,
     status,
     Request,
 )
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from .adapters import (
     DeepgramTranscriptionProvider,
     AIServiceError,
+    InterviewRepositoryError,
     RealtimeServiceError,
     GroqAIProvider,
+    ElevenLabsSpeechProvider,
     SpeechServiceError,
     TranscriptionServiceError,
 )
 from .config import get_settings
 from .billing import (
     PLANS,
+    BillingEntitlement,
     BillingConfigurationError,
     BillingProviderError,
     BillingRepository,
@@ -43,6 +49,7 @@ from .billing import (
 )
 from .account_data import AccountDataError, SupabaseAccountDataService
 from .friends import FriendServiceError, SupabaseFriendService
+from .feedback import FeedbackServiceError, SupabaseFeedbackService
 from .dependencies import (
     current_user,
     get_ai_provider,
@@ -53,6 +60,7 @@ from .dependencies import (
     get_billing_repository,
     get_cashfree_client,
     get_trial_access_repository,
+    get_memory_service,
 )
 from .domain import (
     AuthenticatedUser,
@@ -77,9 +85,12 @@ from .schemas import (
     BillingPlanOut,
     FriendConnectionOut,
     FriendRequestIn,
+    ProductFeedbackIn,
+    ProductFeedbackOut,
 )
 from .voice_profiles import company_voice_reference
 from .trial_access import TrialAccessError, TrialAccessRepository
+from .memory import InterviewMemoryService
 
 
 settings = get_settings()
@@ -88,6 +99,94 @@ MODEL_CAPACITY_MESSAGE = (
     "Our AI models are running at full capacity right now. "
     "Please try again in a few minutes."
 )
+
+
+def _capacity_fallback_question(phase: str) -> str:
+    prompts = {
+        "clarification": "Please restate the key constraints and the approach you want to take.",
+        "approach": "Walk me through why your approach is correct and what data structure it needs.",
+        "coding": "Continue with the implementation and explain the next important step as you code.",
+        "testing": "Test the solution with one normal case and one edge case, and explain the result.",
+        "complexity": "State the time and space complexity and identify the operation that determines each.",
+        "wrap_up": "Summarize your final solution and the most important trade-off you made.",
+    }
+    return prompts.get(phase, prompts["approach"])
+
+
+def _is_unlimited_user(user: AuthenticatedUser) -> bool:
+    return bool(user.email) and user.email.casefold() in settings.unlimited_access_email_set
+
+
+def _unlimited_entitlement(user: AuthenticatedUser) -> BillingEntitlement:
+    now = datetime.now(timezone.utc)
+    return BillingEntitlement(
+        user_id=user.id,
+        plan_id="lifetime",
+        status="active",
+        is_lifetime=True,
+        minutes_limit=0,
+        minutes_used=0,
+        speech_seconds_used=0,
+        period_start=now,
+        period_end=now + timedelta(days=36_500),
+        auto_renew=False,
+    )
+
+
+async def _effective_entitlement(
+    user: AuthenticatedUser,
+    repository: BillingRepository,
+) -> BillingEntitlement | None:
+    if _is_unlimited_user(user):
+        return _unlimited_entitlement(user)
+    return await repository.get_entitlement(user.id)
+
+
+async def _selected_speech_provider(
+    requested_provider: str,
+    user: AuthenticatedUser,
+    billing_repository: BillingRepository,
+    default_provider: SpeechProvider,
+) -> tuple[str, SpeechProvider]:
+    provider_name = requested_provider.strip().lower()
+    if provider_name == "fish":
+        return provider_name, default_provider
+    if provider_name != "elevenlabs":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Voice provider must be fish or elevenlabs.",
+        )
+
+    entitlement = await _effective_entitlement(user, billing_repository)
+    if entitlement is None or entitlement.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ElevenLabs voice requires an active paid plan.",
+        )
+    if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ElevenLabs premium voice is not configured yet.",
+        )
+    return provider_name, ElevenLabsSpeechProvider(settings)
+
+
+async def _load_personal_memory_once(
+    interview,
+    user_id: str,
+    repository: InterviewRepository,
+    memory_service: InterviewMemoryService,
+) -> None:
+    """Retrieve memory only for the first turn, then persist the small context."""
+    if interview.turns or interview.personal_memory:
+        return
+    interview.personal_memory = await memory_service.relevant(user_id, interview)
+    if interview.personal_memory:
+        await repository.update_context(
+            interview.id,
+            user_id,
+            {"personal_memory": interview.personal_memory},
+        )
 
 app = FastAPI(
     title="LeetAlly API",
@@ -167,7 +266,7 @@ async def security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
     response.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=()"
-    if request.url.path.startswith(("/api/v1/billing", "/api/v1/interviews", "/api/v1/account", "/api/v1/friends")):
+    if request.url.path.startswith(("/api/v1/billing", "/api/v1/interviews", "/api/v1/account", "/api/v1/friends", "/api/v1/feedback", "/api/v1/admin")):
         response.headers["Cache-Control"] = "no-store"
     if settings.app_env.lower() == "production":
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
@@ -231,7 +330,7 @@ async def create_billing_checkout(
             detail="Billing is not enabled yet.",
         )
     try:
-        existing = await repository.get_entitlement(user.id)
+        existing = await _effective_entitlement(user, repository)
         if existing is not None and existing.status == "active":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -273,10 +372,41 @@ async def billing_me(
     user: AuthenticatedUser = Depends(current_user),
     repository: BillingRepository = Depends(get_billing_repository),
 ):
-    entitlement = await repository.get_entitlement(user.id)
+    entitlement = await _effective_entitlement(user, repository)
     if entitlement is None:
         return {"status": "none"}
     return entitlement.public_dict()
+
+
+@app.get("/api/v1/voice/providers")
+async def get_voice_providers(
+    user: AuthenticatedUser = Depends(current_user),
+    repository: BillingRepository = Depends(get_billing_repository),
+) -> dict:
+    entitlement = await _effective_entitlement(user, repository)
+    has_premium_access = bool(
+        entitlement is not None and entitlement.status == "active"
+    )
+    elevenlabs_configured = bool(
+        settings.elevenlabs_api_key and settings.elevenlabs_voice_id
+    )
+    return {
+        "providers": [
+            {
+                "id": "fish",
+                "name": "LeetAlly Voice",
+                "available": bool(settings.fish_audio_api_key),
+                "requires_paid": False,
+            },
+            {
+                "id": "elevenlabs",
+                "name": "ElevenLabs Premium",
+                "available": elevenlabs_configured and has_premium_access,
+                "configured": elevenlabs_configured,
+                "requires_paid": True,
+            },
+        ]
+    }
 
 
 @app.post("/api/v1/billing/webhooks/cashfree")
@@ -342,7 +472,7 @@ async def cancel_billing_renewal(
     user: AuthenticatedUser = Depends(current_user),
     repository: BillingRepository = Depends(get_billing_repository),
 ):
-    entitlement = await repository.get_entitlement(user.id)
+    entitlement = await _effective_entitlement(user, repository)
     if entitlement is None or not entitlement.auto_renew or not entitlement.provider_reference:
         raise HTTPException(status_code=409, detail="There is no active automatic renewal to cancel.")
     try:
@@ -387,9 +517,11 @@ async def create_interview(
     billing_repository: BillingRepository = Depends(get_billing_repository),
 ):
     access_tier = "trial"
-    if settings.billing_enabled:
+    if _is_unlimited_user(user):
+        access_tier = "beta_monthly"
+    elif settings.billing_enabled:
         try:
-            entitlement = await billing_repository.get_entitlement(user.id)
+            entitlement = await _effective_entitlement(user, billing_repository)
         except BillingProviderError as error:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -452,6 +584,7 @@ async def read_interview(
 async def submit_interview_audio(
     interview_id: str,
     audio: UploadFile = File(...),
+    voice_provider: str = Form("fish"),
     user: AuthenticatedUser = Depends(current_user),
     repository: InterviewRepository = Depends(
         get_repository
@@ -466,6 +599,7 @@ async def submit_interview_audio(
         get_speech_provider
     ),
     billing_repository: BillingRepository = Depends(get_billing_repository),
+    memory_service: InterviewMemoryService = Depends(get_memory_service),
 ) -> InterviewTurnOut:
     interview = await repository.get(
         interview_id=interview_id,
@@ -482,6 +616,15 @@ async def submit_interview_audio(
             status_code=status.HTTP_409_CONFLICT,
             detail="This interview is already complete.",
         )
+
+    selected_voice_provider, selected_speech_provider = (
+        await _selected_speech_provider(
+            voice_provider,
+            user,
+            billing_repository,
+            speech_provider,
+        )
+    )
 
     content_type = (
         (audio.content_type or "")
@@ -529,13 +672,16 @@ async def submit_interview_audio(
             interviewer_message="",
         )
 
+    unlimited_access = False
     if settings.billing_enabled and interview.access_tier == "beta_monthly":
-        entitlement = await billing_repository.get_entitlement(user.id)
+        entitlement = await _effective_entitlement(user, billing_repository)
         if entitlement is None or entitlement.status != "active":
             raise HTTPException(status_code=402, detail="No active interview entitlement.")
-        remaining_seconds = entitlement.minutes_limit * 60 - entitlement.speech_seconds_used
-        if math.ceil(speech_duration_seconds) > remaining_seconds:
-            raise HTTPException(status_code=402, detail="Speech allowance exceeded.")
+        unlimited_access = entitlement.is_lifetime
+        if not unlimited_access:
+            remaining_seconds = entitlement.minutes_limit * 60 - entitlement.speech_seconds_used
+            if math.ceil(speech_duration_seconds) > remaining_seconds:
+                raise HTTPException(status_code=402, detail="Speech allowance exceeded.")
 
     print(
         "Received interview audio:",
@@ -549,6 +695,9 @@ async def submit_interview_audio(
     )
 
     turn_started_at = time.perf_counter()
+    memory_task = asyncio.create_task(_load_personal_memory_once(
+        interview, user.id, repository, memory_service
+    ))
     transcription_started_at = time.perf_counter()
     try:
         transcript = await transcription_provider.transcribe(
@@ -590,6 +739,7 @@ async def submit_interview_audio(
         )
 
     interview.phase = _advance_sde1_phase(interview, transcript)
+    await memory_task
 
     ai_started_at = time.perf_counter()
     try:
@@ -612,7 +762,11 @@ async def submit_interview_audio(
             detail=MODEL_CAPACITY_MESSAGE,
         ) from error
 
-    if settings.billing_enabled and interview.access_tier == "beta_monthly":
+    if (
+        settings.billing_enabled
+        and interview.access_tier == "beta_monthly"
+        and not unlimited_access
+    ):
         usage_event_id = hashlib.sha256(
             interview_id.encode("utf-8") + audio_bytes
         ).hexdigest()
@@ -650,7 +804,7 @@ async def submit_interview_audio(
 
     speech_started_at = time.perf_counter()
     try:
-        synthesized_speech = await speech_provider.synthesize(
+        synthesized_speech = await selected_speech_provider.synthesize(
             interviewer_message,
             company_voice_reference(
                 interview.target_company,
@@ -681,9 +835,10 @@ async def submit_interview_audio(
         )
 
         print(
-            "Fish Audio synthesis complete:",
+            "Interview voice synthesis complete:",
             {
                 "interview_id": interview_id,
+                "provider": selected_voice_provider,
                 "content_type": (
                     interviewer_audio_content_type
                 ),
@@ -724,6 +879,326 @@ async def submit_interview_audio(
         ),
         service_notice=service_notice,
         phase=interview.phase,
+    )
+
+
+def _sse_event(event: str, data: dict) -> str:
+    """Serialize one event without exposing provider-specific payloads."""
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(data, separators=(',', ':'))}\n\n"
+    )
+
+
+@app.post(
+    "/api/v1/interviews/{interview_id}/turns/audio/stream",
+)
+async def stream_interview_audio(
+    interview_id: str,
+    audio: UploadFile = File(...),
+    voice_provider: str = Form("fish"),
+    user: AuthenticatedUser = Depends(current_user),
+    repository: InterviewRepository = Depends(get_repository),
+    transcription_provider: DeepgramTranscriptionProvider = Depends(
+        get_transcription_provider
+    ),
+    ai_provider: GroqAIProvider = Depends(get_ai_provider),
+    speech_provider: SpeechProvider = Depends(get_speech_provider),
+    billing_repository: BillingRepository = Depends(get_billing_repository),
+    memory_service: InterviewMemoryService = Depends(get_memory_service),
+) -> StreamingResponse:
+    """Stream transcript and interviewer text before voice synthesis finishes."""
+    interview = await repository.get(
+        interview_id=interview_id,
+        user_id=user.id,
+    )
+    if interview is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Interview not found.",
+        )
+    if interview.status == "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This interview is already complete.",
+        )
+    selected_voice_provider, selected_speech_provider = (
+        await _selected_speech_provider(
+            voice_provider,
+            user,
+            billing_repository,
+            speech_provider,
+        )
+    )
+
+    content_type = (audio.content_type or "").split(";")[0].strip().lower()
+    if content_type not in {"audio/wav", "audio/x-wav"}:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"Unsupported audio type: {content_type}",
+        )
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded audio file is empty.",
+        )
+    if len(audio_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="The uploaded audio file is too large.",
+        )
+
+    speech_duration_seconds, speech_rms = _inspect_pcm_wav(
+        audio_bytes,
+        content_type,
+    )
+    below_duration_gate = (
+        speech_duration_seconds
+        < settings.minimum_billable_speech_ms / 1000
+    )
+    below_volume_gate = (
+        speech_rms is not None
+        and speech_rms < settings.minimum_speech_rms
+    )
+
+    unlimited_access = False
+    if settings.billing_enabled and interview.access_tier == "beta_monthly":
+        entitlement = await _effective_entitlement(user, billing_repository)
+        if entitlement is None or entitlement.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="No active interview entitlement.",
+            )
+        unlimited_access = entitlement.is_lifetime
+        if not unlimited_access:
+            remaining_seconds = (
+                entitlement.minutes_limit * 60
+                - entitlement.speech_seconds_used
+            )
+            if math.ceil(speech_duration_seconds) > remaining_seconds:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Speech allowance exceeded.",
+                )
+
+    async def generate_events() -> AsyncIterator[str]:
+        if below_duration_gate or below_volume_gate:
+            yield _sse_event("transcript", {
+                "text": "",
+                "phase": interview.phase,
+            })
+            yield _sse_event("done", {
+                "phase": interview.phase,
+                "service_notice": None,
+            })
+            return
+
+        yield _sse_event("status", {"stage": "transcribing"})
+        memory_task = asyncio.create_task(_load_personal_memory_once(
+            interview, user.id, repository, memory_service
+        ))
+        transcription_started_at = time.perf_counter()
+        try:
+            transcript = await transcription_provider.transcribe(
+                audio_bytes=audio_bytes,
+                content_type=content_type,
+            )
+        except TranscriptionServiceError as error:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "model_service_unavailable",
+                "service": "transcription",
+                "interview_id": interview_id,
+                "error_type": type(error).__name__,
+            }))
+            yield _sse_event("error", {
+                "message": MODEL_CAPACITY_MESSAGE,
+                "retryable": True,
+            })
+            return
+
+        if not transcript.strip():
+            yield _sse_event("transcript", {
+                "text": "",
+                "phase": interview.phase,
+            })
+            yield _sse_event("done", {
+                "phase": interview.phase,
+                "service_notice": None,
+            })
+            return
+
+        interview.phase = _advance_sde1_phase(interview, transcript)
+        await memory_task
+        yield _sse_event("transcript", {
+            "text": transcript,
+            "phase": interview.phase,
+        })
+        yield _sse_event("status", {"stage": "responding"})
+
+        ai_started_at = time.perf_counter()
+        message_parts: list[str] = []
+        capacity_notice: str | None = None
+        try:
+            stream_reply = getattr(ai_provider, "stream_reply", None)
+            if callable(stream_reply):
+                async for delta in stream_reply(
+                    interview=interview,
+                    candidate_message=transcript,
+                ):
+                    if delta:
+                        message_parts.append(delta)
+                        yield _sse_event("assistant_delta", {"text": delta})
+            else:
+                reply = await ai_provider.reply(
+                    interview=interview,
+                    candidate_message=transcript,
+                )
+                if reply:
+                    message_parts.append(reply)
+                    yield _sse_event("assistant_delta", {"text": reply})
+        except Exception as error:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "model_service_unavailable",
+                "service": "interviewer",
+                "interview_id": interview_id,
+                "error_type": type(error).__name__,
+            }))
+            capacity_notice = MODEL_CAPACITY_MESSAGE
+            fallback_question = _capacity_fallback_question(interview.phase)
+            message_parts.append(fallback_question)
+            yield _sse_event("notice", {"message": capacity_notice})
+            yield _sse_event("assistant_delta", {"text": fallback_question})
+
+        interviewer_message = "".join(message_parts).strip()
+        if not interviewer_message:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "empty_interviewer_stream",
+                "service": "interviewer",
+                "interview_id": interview_id,
+            }))
+            yield _sse_event("error", {
+                "message": MODEL_CAPACITY_MESSAGE,
+                "retryable": True,
+            })
+            return
+
+        if (
+            settings.billing_enabled
+            and interview.access_tier == "beta_monthly"
+            and not unlimited_access
+        ):
+            usage_event_id = hashlib.sha256(
+                interview_id.encode("utf-8") + audio_bytes
+            ).hexdigest()
+            try:
+                await billing_repository.consume_speech_seconds(
+                    user_id=user.id,
+                    event_id=usage_event_id,
+                    interview_id=interview_id,
+                    seconds=max(1, math.ceil(speech_duration_seconds)),
+                )
+            except BillingProviderError as error:
+                logger.error(json.dumps({
+                    "level": "error",
+                    "event": "interview_usage_recording_failed",
+                    "service": "billing",
+                    "interview_id": interview_id,
+                    "error_type": type(error).__name__,
+                }))
+                yield _sse_event("error", {
+                    "message": "We could not record interview usage. Please try again.",
+                    "retryable": False,
+                })
+                return
+
+        try:
+            await repository.add_turn(
+                interview_id=interview_id,
+                user_id=user.id,
+                candidate_message=transcript,
+                interviewer_message=interviewer_message,
+                phase=interview.phase,
+            )
+        except InterviewRepositoryError as error:
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "interview_turn_storage_failed",
+                "interview_id": interview_id,
+                "error_type": type(error).__name__,
+            }))
+            yield _sse_event("notice", {
+                "message": "The reply is ready, but this turn could not be saved to interview history.",
+            })
+        yield _sse_event("assistant_done", {
+            "text": interviewer_message,
+            "phase": interview.phase,
+        })
+        logger.info(json.dumps({
+            "level": "info",
+            "event": "interviewer_stream_complete",
+            "interview_id": interview_id,
+            "transcription_ms": round(
+                (ai_started_at - transcription_started_at) * 1000
+            ),
+            "generation_ms": round(
+                (time.perf_counter() - ai_started_at) * 1000
+            ),
+            "message_length": len(interviewer_message),
+        }))
+
+        service_notice: str | None = capacity_notice
+        yield _sse_event("status", {"stage": "voice"})
+        try:
+            synthesized_speech = await selected_speech_provider.synthesize(
+                interviewer_message,
+                company_voice_reference(
+                    interview.target_company,
+                    settings.fish_audio_reference_id,
+                ),
+            )
+        except SpeechServiceError as error:
+            service_notice = MODEL_CAPACITY_MESSAGE
+            logger.error(json.dumps({
+                "level": "error",
+                "event": "model_service_unavailable",
+                "service": "speech",
+                "interview_id": interview_id,
+                "error_type": type(error).__name__,
+            }))
+            yield _sse_event("notice", {"message": service_notice})
+        else:
+            logger.info(json.dumps({
+                "level": "info",
+                "event": "interview_voice_complete",
+                "interview_id": interview_id,
+                "provider": selected_voice_provider,
+                "size_bytes": len(synthesized_speech.data),
+            }))
+            yield _sse_event("audio", {
+                "base64": base64.b64encode(
+                    synthesized_speech.data
+                ).decode("ascii"),
+                "content_type": synthesized_speech.content_type,
+            })
+
+        yield _sse_event("done", {
+            "phase": interview.phase,
+            "service_notice": service_notice,
+        })
+
+    return StreamingResponse(
+        generate_events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -840,7 +1315,7 @@ def _build_sde1_assessment(interview, duration_seconds: int) -> dict:
         "priority_improvements": improvements,
         "next_drills": [f"Redo {interview.problem_title} with a 2-minute approach explanation before coding.", improvements[0], "Complete one timed medium problem and verbalize tests before running code."],
         "duration_seconds": duration_seconds,
-        "completed_at": datetime.now(timezone.utc),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -853,6 +1328,7 @@ async def complete_interview(
     payload: InterviewCompleteIn,
     user: AuthenticatedUser = Depends(current_user),
     repository: InterviewRepository = Depends(get_repository),
+    memory_service: InterviewMemoryService = Depends(get_memory_service),
 ):
     interview = await repository.get(interview_id, user.id)
     if interview is None:
@@ -861,6 +1337,7 @@ async def complete_interview(
     completed = await repository.complete(interview_id, user.id, assessment)
     if completed is None:
         raise HTTPException(status_code=404, detail="Interview not found.")
+    await memory_service.remember(user.id, completed, assessment)
     return assessment
 
 @app.post("/api/v1/realtime/session")
@@ -1016,4 +1493,27 @@ async def remove_friend(
     try:
         await SupabaseFriendService(settings).remove(user.id, str(relationship_id))
     except FriendServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.post("/api/v1/feedback", response_model=ProductFeedbackOut)
+async def submit_product_feedback(
+    payload: ProductFeedbackIn,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        return await SupabaseFeedbackService(settings).submit(
+            user, payload.model_dump(mode="json")
+        )
+    except FeedbackServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.get("/api/v1/admin/feedback", response_model=list[ProductFeedbackOut])
+async def list_product_feedback(
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        return await SupabaseFeedbackService(settings).owner_list(user)
+    except FeedbackServiceError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error

@@ -34,6 +34,9 @@ class Interview:
     assessment: dict[str, Any] | None = None
     phase: str = "clarification"
     code_snapshots: list[CodeSnapshot] = field(default_factory=list)
+    # Retrieved, server-owned summaries from this user's previous interviews.
+    # This is intentionally ephemeral and is never accepted from the client.
+    personal_memory: list[str] = field(default_factory=list)
 
     @property
     def problem_title(self) -> str:

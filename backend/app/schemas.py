@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from typing import Literal
 
@@ -214,8 +215,29 @@ class FriendConnectionOut(BaseModel):
     username: str | None = None
     avatar: str | None = None
     ranking: int | None = None
+    streak: int = 0
     total_solved: int = 0
     easy_solved: int = 0
     medium_solved: int = 0
     hard_solved: int = 0
     synced_at: datetime | None = None
+
+
+class ProductFeedbackIn(BaseModel):
+    message: str = Field(min_length=10, max_length=3000)
+    rating: int = Field(default=5, ge=1, le=5)
+    interview_id: UUID | None = None
+    extension_version: str = Field(default="unknown", max_length=30)
+    problem_slug: str | None = Field(default=None, max_length=200)
+    problem_title: str | None = Field(default=None, max_length=300)
+    difficulty: str | None = Field(default=None, max_length=30)
+    interview_type: Literal["dsa", "behavioral", "lld", "hld"] | None = None
+
+
+class ProductFeedbackOut(BaseModel):
+    id: UUID
+    email: str
+    message: str
+    rating: int
+    metadata: dict = Field(default_factory=dict)
+    created_at: datetime
